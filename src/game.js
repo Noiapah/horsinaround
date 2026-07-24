@@ -1,7 +1,18 @@
-const WORLD_WIDTH = 5200;
-const WORLD_HEIGHT = 4000;
+const WORLD_WIDTH = 8000;
+const WORLD_HEIGHT = 6000;
+const START_X = WORLD_WIDTH / 2;
+const START_Y = WORLD_HEIGHT / 2;
+const MAX_LIVES = 3;
+const HIT_COOLDOWN_MS = 900;
 const HORSE_DIRECTIONS = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
 const GALLOP_CHARGE_MS = 4500;
+const GAIT_DAMAGE = {
+  idle: 0,
+  walk: 0,
+  trot: 1,
+  canter: 2,
+  gallop: 3,
+};
 const GAITS = {
   idle: {
     label: "STANDING",
@@ -52,7 +63,13 @@ class MeadowScene extends Phaser.Scene {
     this.movementFrame = 0;
     this.animationAccumulator = 0;
     this.horseShadow = null;
+    this.obstacles = null;
     this.dustTimer = 0;
+    this.lives = MAX_LIVES;
+    this.hitCooldownUntil = 0;
+    this.knockbackUntil = 0;
+    this.knockbackVelocity = new Phaser.Math.Vector2();
+    this.heartIcons = [];
     this.gaitText = null;
     this.gallopText = null;
     this.gallopBar = null;
@@ -75,11 +92,14 @@ class MeadowScene extends Phaser.Scene {
 
   create() {
     this.createGrassTexture();
+    this.createObstacleTextures();
+    this.createHeartTextures();
     this.add
       .tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, "grass")
       .setOrigin(0);
 
     this.addWorldDetails();
+    this.createObstacles();
 
     this.physics.world.setBounds(24, 24, WORLD_WIDTH - 48, WORLD_HEIGHT - 48);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
@@ -87,8 +107,8 @@ class MeadowScene extends Phaser.Scene {
 
     this.horseShadow = this.add
       .ellipse(
-        WORLD_WIDTH / 2,
-        WORLD_HEIGHT / 2 + 30,
+        START_X,
+        START_Y + 30,
         54,
         16,
         0x1b2b18,
@@ -97,11 +117,18 @@ class MeadowScene extends Phaser.Scene {
       .setDepth(9);
 
     this.horse = this.physics.add
-      .sprite(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, "horse-n-idle")
+      .sprite(START_X, START_Y, "horse-n-idle")
       .setDepth(10)
       .setCollideWorldBounds(true);
 
     this.setHorseCollider("n");
+    this.physics.add.collider(
+      this.horse,
+      this.obstacles,
+      this.handleObstacleCollision,
+      null,
+      this,
+    );
 
     this.cameras.main.startFollow(this.horse, true, 0.09, 0.09);
     this.cameras.main.setZoom(1.15);
@@ -127,7 +154,16 @@ class MeadowScene extends Phaser.Scene {
     this.createHud();
   }
 
-  update(_time, delta) {
+  update(time, delta) {
+    if (time < this.knockbackUntil) {
+      this.horse.setVelocity(
+        this.knockbackVelocity.x,
+        this.knockbackVelocity.y,
+      );
+      this.updateShadow(0);
+      return;
+    }
+
     const horizontal = Number(this.keys.right.isDown) - Number(this.keys.left.isDown);
     const vertical = Number(this.keys.down.isDown) - Number(this.keys.up.isDown);
     const direction = new Phaser.Math.Vector2(horizontal, vertical);
@@ -191,6 +227,87 @@ class MeadowScene extends Phaser.Scene {
     this.horseShadow.setPosition(this.horse.x, this.horse.y + 31);
     this.horseShadow.setScale(1 - lift * 0.14, 1 - lift * 0.08);
     this.horseShadow.setAlpha(0.25 - lift * 0.08);
+  }
+
+  handleObstacleCollision(horse, obstacle) {
+    const now = this.time.now;
+    if (now < this.hitCooldownUntil) return;
+
+    const damage = GAIT_DAMAGE[this.currentGait];
+    if (damage === 0) {
+      this.hitCooldownUntil = now + 300;
+      this.showCollisionMessage("CAREFUL WALK - SAFE", "#bde59f");
+      return;
+    }
+
+    this.hitCooldownUntil = now + HIT_COOLDOWN_MS;
+    this.lives -= damage;
+    this.updateHearts();
+    this.showCollisionMessage(`-${damage} HEART${damage > 1 ? "S" : ""}`, "#ff776d");
+    this.cameras.main.shake(130 + damage * 35, 0.004 + damage * 0.002);
+
+    horse.setTintFill(0xff776d);
+    this.time.delayedCall(160, () => horse.clearTint());
+
+    const away = new Phaser.Math.Vector2(
+      horse.x - obstacle.x,
+      horse.y - obstacle.y,
+    );
+    if (away.lengthSq() === 0) {
+      away.set(-horse.body.velocity.x, -horse.body.velocity.y);
+    }
+    away.normalize();
+    this.knockbackVelocity.copy(away).scale(190 + damage * 35);
+    this.knockbackUntil = now + 260;
+
+    if (this.lives <= 0) {
+      this.resetHorse();
+    }
+  }
+
+  resetHorse() {
+    this.lives = MAX_LIVES;
+    this.gallopCharge = 0;
+    this.currentGait = "idle";
+    this.currentFacing = "n";
+    this.movementFrame = 0;
+    this.animationAccumulator = 0;
+    this.knockbackUntil = 0;
+    this.hitCooldownUntil = this.time.now + 1200;
+    this.horse.body.reset(START_X, START_Y);
+    this.horse.setTexture("horse-n-idle");
+    this.horse.setScale(1);
+    this.horse.setAngle(0);
+    this.horse.clearTint();
+    this.horseShadow.setPosition(START_X, START_Y + 31);
+    this.updateHearts();
+    this.showCollisionMessage("BACK TO THE PADDOCK!", "#fff4bd");
+    this.cameras.main.flash(220, 255, 244, 189, false);
+    this.updateGaitHud();
+  }
+
+  showCollisionMessage(message, color) {
+    const notice = this.add
+      .text(this.horse.x, this.horse.y - 68, message, {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "13px",
+        fontStyle: "bold",
+        color,
+        backgroundColor: "#142416",
+        padding: { x: 5, y: 3 },
+        resolution: 2,
+      })
+      .setOrigin(0.5)
+      .setDepth(30);
+
+    this.tweens.add({
+      targets: notice,
+      y: notice.y - 24,
+      alpha: 0,
+      duration: 850,
+      ease: "Quad.easeOut",
+      onComplete: () => notice.destroy(),
+    });
   }
 
   emitDust(direction, gait, delta) {
@@ -276,6 +393,134 @@ class MeadowScene extends Phaser.Scene {
     this.horse.body.setOffset(45, 22);
   }
 
+  createObstacleTextures() {
+    const puddle = this.make.graphics({ x: 0, y: 0, add: false });
+    puddle.fillStyle(0x213d52);
+    puddle.fillRect(16, 8, 64, 8);
+    puddle.fillRect(8, 16, 80, 32);
+    puddle.fillRect(16, 48, 64, 8);
+    puddle.fillStyle(0x2f6173);
+    puddle.fillRect(16, 16, 64, 24);
+    puddle.fillRect(24, 40, 48, 8);
+    puddle.fillStyle(0x6fa5a2);
+    puddle.fillRect(24, 20, 24, 4);
+    puddle.fillRect(56, 36, 16, 4);
+    puddle.generateTexture("puddle", 96, 64);
+    puddle.destroy();
+
+    this.createFenceTexture("fence-horizontal", false);
+    this.createFenceTexture("fence-vertical", true);
+  }
+
+  createFenceTexture(key, vertical) {
+    const width = vertical ? 64 : 128;
+    const height = vertical ? 128 : 64;
+    const fence = this.make.graphics({ x: 0, y: 0, add: false });
+    const posts = vertical ? [10, 58, 106] : [10, 58, 106];
+
+    fence.fillStyle(0x392617);
+    if (vertical) {
+      fence.fillRect(20, 8, 8, 112);
+      fence.fillRect(40, 8, 8, 112);
+      for (const y of posts) {
+        fence.fillRect(12, y, 44, 12);
+      }
+    } else {
+      fence.fillRect(8, 20, 112, 8);
+      fence.fillRect(8, 40, 112, 8);
+      for (const x of posts) {
+        fence.fillRect(x, 12, 12, 44);
+      }
+    }
+
+    fence.fillStyle(0x8b5426);
+    if (vertical) {
+      fence.fillRect(24, 8, 8, 112);
+      fence.fillRect(44, 8, 8, 112);
+      for (const y of posts) {
+        fence.fillRect(16, y, 36, 8);
+        fence.fillRect(20, y - 4, 28, 4);
+      }
+    } else {
+      fence.fillRect(8, 24, 112, 8);
+      fence.fillRect(8, 44, 112, 8);
+      for (const x of posts) {
+        fence.fillRect(x, 16, 8, 36);
+        fence.fillRect(x - 4, 20, 4, 28);
+      }
+    }
+
+    fence.fillStyle(0xc17a32);
+    if (vertical) {
+      fence.fillRect(28, 12, 4, 104);
+      fence.fillRect(48, 12, 4, 104);
+    } else {
+      fence.fillRect(12, 28, 104, 4);
+      fence.fillRect(12, 48, 104, 4);
+    }
+    fence.generateTexture(key, width, height);
+    fence.destroy();
+  }
+
+  createObstacles() {
+    this.obstacles = this.physics.add.staticGroup();
+
+    const addObstacle = (x, y, texture) => {
+      const obstacle = this.obstacles
+        .create(x, y, texture)
+        .setDepth(8);
+
+      if (texture === "puddle") {
+        obstacle.body.setSize(76, 40);
+      } else if (texture === "fence-horizontal") {
+        obstacle.body.setSize(116, 48);
+      } else {
+        obstacle.body.setSize(48, 116);
+      }
+      obstacle.body.updateFromGameObject();
+    };
+
+    addObstacle(START_X + 310, START_Y + 70, "puddle");
+    addObstacle(START_X - 300, START_Y - 150, "fence-horizontal");
+    addObstacle(START_X - 330, START_Y + 210, "fence-vertical");
+    addObstacle(START_X + 420, START_Y - 190, "fence-horizontal");
+
+    const random = new Phaser.Math.RandomDataGenerator(["horsin-obstacles"]);
+    const textures = ["puddle", "fence-horizontal", "fence-vertical"];
+    for (let i = 0; i < 64; i += 1) {
+      let x;
+      let y;
+      do {
+        x = random.between(160, WORLD_WIDTH - 160);
+        y = random.between(160, WORLD_HEIGHT - 160);
+      } while (Phaser.Math.Distance.Between(x, y, START_X, START_Y) < 520);
+
+      addObstacle(x, y, random.pick(textures));
+    }
+  }
+
+  createHeartTextures() {
+    const createHeart = (key, fillColor) => {
+      const heart = this.make.graphics({ x: 0, y: 0, add: false });
+      heart.fillStyle(0x3b1f21);
+      heart.fillRect(2, 0, 4, 2);
+      heart.fillRect(10, 0, 4, 2);
+      heart.fillRect(0, 2, 16, 6);
+      heart.fillRect(2, 8, 12, 2);
+      heart.fillRect(4, 10, 8, 2);
+      heart.fillRect(6, 12, 4, 2);
+      heart.fillStyle(fillColor);
+      heart.fillRect(2, 2, 12, 4);
+      heart.fillRect(4, 6, 8, 2);
+      heart.fillRect(6, 8, 4, 2);
+      heart.generateTexture(key, 16, 14);
+      heart.destroy();
+    };
+
+    createHeart("heart-full", 0xe84f4f);
+    createHeart("heart-empty", 0x5d4b4b);
+  }
+
   createGrassTexture() {
     const texture = this.make.graphics({ x: 0, y: 0, add: false });
     texture.fillStyle(0x5f9d45);
@@ -309,7 +554,7 @@ class MeadowScene extends Phaser.Scene {
     detail.strokeRect(20, 20, WORLD_WIDTH - 40, WORLD_HEIGHT - 40);
 
     const random = new Phaser.Math.RandomDataGenerator(["horsin-around"]);
-    for (let i = 0; i < 160; i += 1) {
+    for (let i = 0; i < 320; i += 1) {
       const x = random.between(45, WORLD_WIDTH - 45);
       const y = random.between(45, WORLD_HEIGHT - 45);
       const shade = random.pick([0x4b8337, 0x77ad53, 0x538d3c]);
@@ -321,17 +566,32 @@ class MeadowScene extends Phaser.Scene {
   }
 
   createHud() {
+    // The main camera is zoomed, so fixed HUD coordinates need a small inset
+    // to remain inside the visible top-left safe area.
+    const hudOffsetX = 62;
+    const hudOffsetY = 35;
     const panel = this.add
-      .rectangle(18, 18, 320, 132, 0x142416, 0.88)
+      .rectangle(18 + hudOffsetX, 18 + hudOffsetY, 352, 178, 0x142416, 0.88)
       .setOrigin(0)
       .setScrollFactor(0)
       .setDepth(100);
     panel.setStrokeStyle(3, 0xb7d878);
 
+    for (let i = 0; i < MAX_LIVES; i += 1) {
+      this.heartIcons.push(
+        this.add
+          .image(34 + hudOffsetX + i * 30, 29 + hudOffsetY, "heart-full")
+          .setOrigin(0)
+          .setScale(1.5)
+          .setScrollFactor(0)
+          .setDepth(101),
+      );
+    }
+
     this.add
-      .text(34, 29, "HORSIN' AROUND", {
+      .text(136 + hudOffsetX, 29 + hudOffsetY, "HORSIN' AROUND", {
         fontFamily: '"Courier New", monospace',
-        fontSize: "19px",
+        fontSize: "17px",
         fontStyle: "bold",
         color: "#fff4bd",
         resolution: 2,
@@ -340,7 +600,7 @@ class MeadowScene extends Phaser.Scene {
       .setDepth(101);
 
     this.add
-      .text(34, 57, "WASD MOVE  |  CTRL WALK  |  SHIFT RUN", {
+      .text(34 + hudOffsetX, 63 + hudOffsetY, "WASD MOVE  |  CTRL WALK  |  SHIFT RUN", {
         fontFamily: '"Courier New", monospace',
         fontSize: "11px",
         color: "#d9efb0",
@@ -350,7 +610,7 @@ class MeadowScene extends Phaser.Scene {
       .setDepth(101);
 
     this.gaitText = this.add
-      .text(34, 80, "GAIT: STANDING", {
+      .text(34 + hudOffsetX, 86 + hudOffsetY, "GAIT: STANDING", {
         fontFamily: '"Courier New", monospace',
         fontSize: "15px",
         fontStyle: "bold",
@@ -361,20 +621,20 @@ class MeadowScene extends Phaser.Scene {
       .setDepth(101);
 
     this.add
-      .rectangle(34, 108, 270, 7, 0x324735, 1)
+      .rectangle(34 + hudOffsetX, 114 + hudOffsetY, 302, 7, 0x324735, 1)
       .setOrigin(0)
       .setScrollFactor(0)
       .setDepth(101);
 
     this.gallopBar = this.add
-      .rectangle(34, 108, 270, 7, 0xff8a5b, 1)
+      .rectangle(34 + hudOffsetX, 114 + hudOffsetY, 302, 7, 0xff8a5b, 1)
       .setOrigin(0)
       .setScale(0, 1)
       .setScrollFactor(0)
       .setDepth(102);
 
     this.gallopText = this.add
-      .text(34, 120, "HOLD SHIFT WHILE MOVING TO GALLOP", {
+      .text(34 + hudOffsetX, 126 + hudOffsetY, "HOLD SHIFT WHILE MOVING TO GALLOP", {
         fontFamily: '"Courier New", monospace',
         fontSize: "10px",
         color: "#a9bd9a",
@@ -383,7 +643,24 @@ class MeadowScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(101);
 
+    this.add
+      .text(34 + hudOffsetX, 151 + hudOffsetY, "TROT -1  |  CANTER -2  |  GALLOP -3", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "10px",
+        color: "#ffaaa2",
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.updateHearts();
     this.updateGaitHud();
+  }
+
+  updateHearts() {
+    for (let i = 0; i < this.heartIcons.length; i += 1) {
+      this.heartIcons[i].setTexture(i < this.lives ? "heart-full" : "heart-empty");
+    }
   }
 
   updateGaitHud() {
