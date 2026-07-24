@@ -6,36 +6,36 @@ const GAITS = {
   idle: {
     label: "STANDING",
     speed: 0,
-    strideFrequency: 0,
-    bobAmount: 0,
+    animationFps: 0,
+    dustInterval: 0,
     color: "#c6d6b6",
   },
   walk: {
     label: "WALK",
     speed: 110,
-    strideFrequency: 0.01,
-    bobAmount: 0.012,
+    animationFps: 4,
+    dustInterval: 0,
     color: "#bde59f",
   },
   trot: {
     label: "TROT",
     speed: 240,
-    strideFrequency: 0.018,
-    bobAmount: 0.025,
+    animationFps: 6,
+    dustInterval: 0,
     color: "#fff4bd",
   },
   canter: {
     label: "CANTER",
     speed: 345,
-    strideFrequency: 0.024,
-    bobAmount: 0.035,
+    animationFps: 8,
+    dustInterval: 160,
     color: "#ffd06a",
   },
   gallop: {
     label: "GALLOP!",
     speed: 470,
-    strideFrequency: 0.031,
-    bobAmount: 0.045,
+    animationFps: 10,
+    dustInterval: 80,
     color: "#ff8a5b",
   },
 };
@@ -46,9 +46,13 @@ class MeadowScene extends Phaser.Scene {
     this.horse = null;
     this.keys = null;
     this.isMoving = false;
-    this.walkTime = 0;
     this.gallopCharge = 0;
     this.currentGait = "idle";
+    this.currentFacing = "n";
+    this.movementFrame = 0;
+    this.animationAccumulator = 0;
+    this.horseShadow = null;
+    this.dustTimer = 0;
     this.gaitText = null;
     this.gallopText = null;
     this.gallopBar = null;
@@ -57,9 +61,15 @@ class MeadowScene extends Phaser.Scene {
   preload() {
     for (const direction of HORSE_DIRECTIONS) {
       this.load.image(
-        `horse-${direction}`,
-        `./public/assets/horse/horse-${direction}.png`,
+        `horse-${direction}-idle`,
+        `./public/assets/horse/animation/horse-${direction}-idle.png`,
       );
+      for (let frame = 0; frame < 4; frame += 1) {
+        this.load.image(
+          `horse-${direction}-walk-${frame}`,
+          `./public/assets/horse/animation/horse-${direction}-walk-${frame}.png`,
+        );
+      }
     }
   }
 
@@ -75,8 +85,19 @@ class MeadowScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.setBackgroundColor("#5c963f");
 
+    this.horseShadow = this.add
+      .ellipse(
+        WORLD_WIDTH / 2,
+        WORLD_HEIGHT / 2 + 30,
+        54,
+        16,
+        0x1b2b18,
+        0.25,
+      )
+      .setDepth(9);
+
     this.horse = this.physics.add
-      .sprite(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, "horse-n")
+      .sprite(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, "horse-n-idle")
       .setDepth(10)
       .setCollideWorldBounds(true);
 
@@ -115,11 +136,16 @@ class MeadowScene extends Phaser.Scene {
 
     if (!this.isMoving) {
       this.horse.setVelocity(0, 0);
-      this.walkTime = 0;
       this.gallopCharge = 0;
       this.currentGait = "idle";
+      this.movementFrame = 0;
+      this.animationAccumulator = 0;
       this.horse.setScale(1);
+      this.horse.setAngle(0);
       this.horse.setY(Math.round(this.horse.y));
+      this.dustTimer = 0;
+      this.horse.setTexture(`horse-${this.currentFacing}-idle`);
+      this.updateShadow(0);
       this.updateGaitHud();
       return;
     }
@@ -134,16 +160,68 @@ class MeadowScene extends Phaser.Scene {
     );
 
     const facing = this.getFacingDirection(horizontal, vertical);
-    this.horse.setTexture(`horse-${facing}`);
-    this.horse.setAngle(0);
+    this.currentFacing = facing;
     this.setHorseCollider(facing);
-
-    // A restrained pixel-style gait while dedicated animation frames are pending.
-    this.walkTime += delta;
-    const stride = Math.sin(this.walkTime * gait.strideFrequency);
-    const bob = Math.abs(stride) * gait.bobAmount;
-    this.horse.setScale(1 + bob, 1 - bob * 0.6);
+    this.updateHorseAnimation(gait, delta);
+    this.emitDust(direction, gait, delta);
     this.updateGaitHud();
+  }
+
+  updateHorseAnimation(gait, delta) {
+    const frameDuration = 1000 / gait.animationFps;
+    this.animationAccumulator += delta;
+
+    while (this.animationAccumulator >= frameDuration) {
+      this.animationAccumulator -= frameDuration;
+      this.movementFrame = (this.movementFrame + 1) % 4;
+    }
+
+    this.horse.setScale(1);
+    this.horse.setAngle(0);
+    this.horse.setTexture(
+      `horse-${this.currentFacing}-walk-${this.movementFrame}`,
+    );
+
+    const liftByFrame = [0.12, 0, 0.08, 0.04];
+    const lift = liftByFrame[this.movementFrame];
+    this.updateShadow(lift);
+  }
+
+  updateShadow(lift) {
+    this.horseShadow.setPosition(this.horse.x, this.horse.y + 31);
+    this.horseShadow.setScale(1 - lift * 0.14, 1 - lift * 0.08);
+    this.horseShadow.setAlpha(0.25 - lift * 0.08);
+  }
+
+  emitDust(direction, gait, delta) {
+    if (!gait.dustInterval) {
+      this.dustTimer = 0;
+      return;
+    }
+
+    this.dustTimer += delta;
+    if (this.dustTimer < gait.dustInterval) return;
+    this.dustTimer %= gait.dustInterval;
+
+    const behindX =
+      this.horse.x - direction.x * 42 + Phaser.Math.Between(-5, 5);
+    const behindY =
+      this.horse.y - direction.y * 42 + 30 + Phaser.Math.Between(-3, 3);
+    const size = this.currentGait === "gallop" ? 7 : 5;
+    const dust = this.add
+      .rectangle(behindX, behindY, size, size, 0xd6c27b, 0.55)
+      .setDepth(8);
+
+    this.tweens.add({
+      targets: dust,
+      x: behindX - direction.x * 18,
+      y: behindY - direction.y * 18 - 4,
+      alpha: 0,
+      scale: 1.8,
+      duration: this.currentGait === "gallop" ? 320 : 420,
+      ease: "Quad.easeOut",
+      onComplete: () => dust.destroy(),
+    });
   }
 
   getCurrentGait(delta) {
@@ -201,25 +279,22 @@ class MeadowScene extends Phaser.Scene {
   createGrassTexture() {
     const texture = this.make.graphics({ x: 0, y: 0, add: false });
     texture.fillStyle(0x5f9d45);
-    texture.fillRect(0, 0, 64, 64);
+    texture.fillRect(0, 0, 32, 32);
 
     const tufts = [
-      [8, 10, 0x4d8738],
-      [42, 6, 0x75ad52],
-      [25, 31, 0x548f3d],
-      [54, 45, 0x4b8236],
-      [12, 53, 0x78af54],
-      [36, 58, 0x568f3d],
+      [7, 7, 0x477d35],
+      [23, 15, 0x79ad55],
+      [12, 26, 0x508b3b],
     ];
 
     for (const [x, y, color] of tufts) {
       texture.fillStyle(color);
-      texture.fillRect(x, y, 3, 5);
+      texture.fillRect(x, y, 2, 4);
       texture.fillRect(x - 2, y + 2, 2, 2);
-      texture.fillRect(x + 3, y + 1, 2, 2);
+      texture.fillRect(x + 2, y + 1, 2, 2);
     }
 
-    texture.generateTexture("grass", 64, 64);
+    texture.generateTexture("grass", 32, 32);
     texture.destroy();
   }
 
@@ -239,9 +314,9 @@ class MeadowScene extends Phaser.Scene {
       const y = random.between(45, WORLD_HEIGHT - 45);
       const shade = random.pick([0x4b8337, 0x77ad53, 0x538d3c]);
       detail.fillStyle(shade, 0.7);
-      detail.fillRect(x, y, 3, random.between(4, 7));
-      detail.fillRect(x - 2, y + 2, 2, 2);
-      detail.fillRect(x + 3, y + 1, 2, 2);
+      detail.fillRect(x, y, 4, random.pick([4, 8]));
+      detail.fillRect(x - 4, y + 4, 4, 4);
+      detail.fillRect(x + 4, y, 4, 4);
     }
   }
 
