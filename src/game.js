@@ -138,7 +138,7 @@ class MeadowScene extends Phaser.Scene {
       left: Phaser.Input.Keyboard.KeyCodes.A,
       down: Phaser.Input.Keyboard.KeyCodes.S,
       right: Phaser.Input.Keyboard.KeyCodes.D,
-      walk: Phaser.Input.Keyboard.KeyCodes.CTRL,
+      walk: Phaser.Input.Keyboard.KeyCodes.V,
       run: Phaser.Input.Keyboard.KeyCodes.SHIFT,
     });
 
@@ -147,7 +147,7 @@ class MeadowScene extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.A,
       Phaser.Input.Keyboard.KeyCodes.S,
       Phaser.Input.Keyboard.KeyCodes.D,
-      Phaser.Input.Keyboard.KeyCodes.CTRL,
+      Phaser.Input.Keyboard.KeyCodes.V,
       Phaser.Input.Keyboard.KeyCodes.SHIFT,
     ]);
 
@@ -600,7 +600,7 @@ class MeadowScene extends Phaser.Scene {
       .setDepth(101);
 
     this.add
-      .text(34 + hudOffsetX, 63 + hudOffsetY, "WASD MOVE  |  CTRL WALK  |  SHIFT RUN", {
+      .text(34 + hudOffsetX, 63 + hudOffsetY, "WASD MOVE  |  V WALK  |  SHIFT RUN", {
         fontFamily: '"Courier New", monospace',
         fontSize: "11px",
         color: "#d9efb0",
