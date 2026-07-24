@@ -16,6 +16,11 @@ Then open <http://localhost:8080>.
 Use **WASD** to move. Diagonal movement is normalized to the same speed as
 horizontal and vertical movement.
 
+- Hold **Ctrl** to walk slowly.
+- Move without a modifier to trot.
+- Hold **Shift** to canter.
+- Keep moving with **Shift** held for 4.5 seconds to enter a full gallop.
+
 ## Project layout
 
 - `src/game.js` — Phaser scene, controls, camera, and meadow

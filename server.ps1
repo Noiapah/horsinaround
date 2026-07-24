@@ -22,6 +22,11 @@ $mimeTypes = @{
 
 try {
   while ($true) {
+    # Poll before accepting so PowerShell can process Ctrl+C while idle.
+    while (-not $listener.Pending()) {
+      Start-Sleep -Milliseconds 100
+    }
+
     $client = $listener.AcceptTcpClient()
 
     try {

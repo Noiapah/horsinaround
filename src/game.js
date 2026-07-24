@@ -1,7 +1,44 @@
-const WORLD_WIDTH = 2400;
-const WORLD_HEIGHT = 1800;
-const HORSE_SPEED = 240;
+const WORLD_WIDTH = 5200;
+const WORLD_HEIGHT = 4000;
 const HORSE_DIRECTIONS = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
+const GALLOP_CHARGE_MS = 4500;
+const GAITS = {
+  idle: {
+    label: "STANDING",
+    speed: 0,
+    strideFrequency: 0,
+    bobAmount: 0,
+    color: "#c6d6b6",
+  },
+  walk: {
+    label: "WALK",
+    speed: 110,
+    strideFrequency: 0.01,
+    bobAmount: 0.012,
+    color: "#bde59f",
+  },
+  trot: {
+    label: "TROT",
+    speed: 240,
+    strideFrequency: 0.018,
+    bobAmount: 0.025,
+    color: "#fff4bd",
+  },
+  canter: {
+    label: "CANTER",
+    speed: 345,
+    strideFrequency: 0.024,
+    bobAmount: 0.035,
+    color: "#ffd06a",
+  },
+  gallop: {
+    label: "GALLOP!",
+    speed: 470,
+    strideFrequency: 0.031,
+    bobAmount: 0.045,
+    color: "#ff8a5b",
+  },
+};
 
 class MeadowScene extends Phaser.Scene {
   constructor() {
@@ -10,6 +47,11 @@ class MeadowScene extends Phaser.Scene {
     this.keys = null;
     this.isMoving = false;
     this.walkTime = 0;
+    this.gallopCharge = 0;
+    this.currentGait = "idle";
+    this.gaitText = null;
+    this.gallopText = null;
+    this.gallopBar = null;
   }
 
   preload() {
@@ -48,7 +90,18 @@ class MeadowScene extends Phaser.Scene {
       left: Phaser.Input.Keyboard.KeyCodes.A,
       down: Phaser.Input.Keyboard.KeyCodes.S,
       right: Phaser.Input.Keyboard.KeyCodes.D,
+      walk: Phaser.Input.Keyboard.KeyCodes.CTRL,
+      run: Phaser.Input.Keyboard.KeyCodes.SHIFT,
     });
+
+    this.input.keyboard.addCapture([
+      Phaser.Input.Keyboard.KeyCodes.W,
+      Phaser.Input.Keyboard.KeyCodes.A,
+      Phaser.Input.Keyboard.KeyCodes.S,
+      Phaser.Input.Keyboard.KeyCodes.D,
+      Phaser.Input.Keyboard.KeyCodes.CTRL,
+      Phaser.Input.Keyboard.KeyCodes.SHIFT,
+    ]);
 
     this.createHud();
   }
@@ -63,15 +116,21 @@ class MeadowScene extends Phaser.Scene {
     if (!this.isMoving) {
       this.horse.setVelocity(0, 0);
       this.walkTime = 0;
+      this.gallopCharge = 0;
+      this.currentGait = "idle";
       this.horse.setScale(1);
       this.horse.setY(Math.round(this.horse.y));
+      this.updateGaitHud();
       return;
     }
 
+    this.currentGait = this.getCurrentGait(delta);
+    const gait = GAITS[this.currentGait];
+
     direction.normalize();
     this.horse.setVelocity(
-      direction.x * HORSE_SPEED,
-      direction.y * HORSE_SPEED,
+      direction.x * gait.speed,
+      direction.y * gait.speed,
     );
 
     const facing = this.getFacingDirection(horizontal, vertical);
@@ -81,8 +140,29 @@ class MeadowScene extends Phaser.Scene {
 
     // A restrained pixel-style gait while dedicated animation frames are pending.
     this.walkTime += delta;
-    const stride = Math.sin(this.walkTime * 0.018);
-    this.horse.setScale(1 + Math.abs(stride) * 0.025, 1 - Math.abs(stride) * 0.015);
+    const stride = Math.sin(this.walkTime * gait.strideFrequency);
+    const bob = Math.abs(stride) * gait.bobAmount;
+    this.horse.setScale(1 + bob, 1 - bob * 0.6);
+    this.updateGaitHud();
+  }
+
+  getCurrentGait(delta) {
+    // Walking takes priority if both modifiers are held.
+    if (this.keys.walk.isDown) {
+      this.gallopCharge = 0;
+      return "walk";
+    }
+
+    if (this.keys.run.isDown) {
+      this.gallopCharge = Math.min(
+        this.gallopCharge + delta,
+        GALLOP_CHARGE_MS,
+      );
+      return this.gallopCharge >= GALLOP_CHARGE_MS ? "gallop" : "canter";
+    }
+
+    this.gallopCharge = 0;
+    return "trot";
   }
 
   getFacingDirection(horizontal, vertical) {
@@ -167,7 +247,7 @@ class MeadowScene extends Phaser.Scene {
 
   createHud() {
     const panel = this.add
-      .rectangle(18, 18, 258, 74, 0x142416, 0.88)
+      .rectangle(18, 18, 320, 132, 0x142416, 0.88)
       .setOrigin(0)
       .setScrollFactor(0)
       .setDepth(100);
@@ -185,14 +265,76 @@ class MeadowScene extends Phaser.Scene {
       .setDepth(101);
 
     this.add
-      .text(34, 57, "WASD  •  MOVE IN 8 DIRECTIONS", {
+      .text(34, 57, "WASD MOVE  |  CTRL WALK  |  SHIFT RUN", {
         fontFamily: '"Courier New", monospace',
-        fontSize: "12px",
+        fontSize: "11px",
         color: "#d9efb0",
         resolution: 2,
       })
       .setScrollFactor(0)
       .setDepth(101);
+
+    this.gaitText = this.add
+      .text(34, 80, "GAIT: STANDING", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "15px",
+        fontStyle: "bold",
+        color: GAITS.idle.color,
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.add
+      .rectangle(34, 108, 270, 7, 0x324735, 1)
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.gallopBar = this.add
+      .rectangle(34, 108, 270, 7, 0xff8a5b, 1)
+      .setOrigin(0)
+      .setScale(0, 1)
+      .setScrollFactor(0)
+      .setDepth(102);
+
+    this.gallopText = this.add
+      .text(34, 120, "HOLD SHIFT WHILE MOVING TO GALLOP", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "10px",
+        color: "#a9bd9a",
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.updateGaitHud();
+  }
+
+  updateGaitHud() {
+    const gait = GAITS[this.currentGait];
+    const progress = Phaser.Math.Clamp(
+      this.gallopCharge / GALLOP_CHARGE_MS,
+      0,
+      1,
+    );
+
+    this.gaitText
+      .setText(`GAIT: ${gait.label}  |  ${gait.speed} SPEED`)
+      .setColor(gait.color);
+    this.gallopBar.setScale(progress, 1);
+
+    if (this.currentGait === "gallop") {
+      this.gallopText.setText("FULL GALLOP!").setColor(GAITS.gallop.color);
+    } else if (this.currentGait === "canter") {
+      this.gallopText
+        .setText(`GALLOP BUILDING: ${Math.floor(progress * 100)}%`)
+        .setColor(GAITS.canter.color);
+    } else {
+      this.gallopText
+        .setText("HOLD SHIFT WHILE MOVING TO GALLOP")
+        .setColor("#a9bd9a");
+    }
   }
 }
 
