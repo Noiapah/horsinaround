@@ -4,6 +4,9 @@ const START_X = WORLD_WIDTH / 2;
 const START_Y = WORLD_HEIGHT / 2;
 const MAX_LIVES = 3;
 const HIT_COOLDOWN_MS = 900;
+const JUMP_DURATION_MS = 850;
+const JUMP_COOLDOWN_MS = 1050;
+const JUMP_HEIGHT = 48;
 const HORSE_DIRECTIONS = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
 const GALLOP_CHARGE_MS = 4500;
 const GAIT_DAMAGE = {
@@ -69,6 +72,9 @@ class MeadowScene extends Phaser.Scene {
     this.hitCooldownUntil = 0;
     this.knockbackUntil = 0;
     this.knockbackVelocity = new Phaser.Math.Vector2();
+    this.isJumping = false;
+    this.jumpStartedAt = 0;
+    this.jumpCooldownUntil = 0;
     this.heartIcons = [];
     this.gaitText = null;
     this.gallopText = null;
@@ -99,6 +105,7 @@ class MeadowScene extends Phaser.Scene {
       .setOrigin(0);
 
     this.addWorldDetails();
+    this.addFlowers();
     this.createObstacles();
 
     this.physics.world.setBounds(24, 24, WORLD_WIDTH - 48, WORLD_HEIGHT - 48);
@@ -126,7 +133,7 @@ class MeadowScene extends Phaser.Scene {
       this.horse,
       this.obstacles,
       this.handleObstacleCollision,
-      null,
+      this.canCollideWithObstacle,
       this,
     );
 
@@ -140,6 +147,7 @@ class MeadowScene extends Phaser.Scene {
       right: Phaser.Input.Keyboard.KeyCodes.D,
       walk: Phaser.Input.Keyboard.KeyCodes.V,
       run: Phaser.Input.Keyboard.KeyCodes.SHIFT,
+      jump: Phaser.Input.Keyboard.KeyCodes.SPACE,
     });
 
     this.input.keyboard.addCapture([
@@ -149,18 +157,24 @@ class MeadowScene extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.D,
       Phaser.Input.Keyboard.KeyCodes.V,
       Phaser.Input.Keyboard.KeyCodes.SHIFT,
+      Phaser.Input.Keyboard.KeyCodes.SPACE,
     ]);
 
     this.createHud();
   }
 
   update(time, delta) {
+    if (Phaser.Input.Keyboard.JustDown(this.keys.jump)) {
+      this.startJump(time);
+    }
+
     if (time < this.knockbackUntil) {
       this.horse.setVelocity(
         this.knockbackVelocity.x,
         this.knockbackVelocity.y,
       );
       this.updateShadow(0);
+      this.updateJump(time);
       return;
     }
 
@@ -182,6 +196,7 @@ class MeadowScene extends Phaser.Scene {
       this.dustTimer = 0;
       this.horse.setTexture(`horse-${this.currentFacing}-idle`);
       this.updateShadow(0);
+      this.updateJump(time);
       this.updateGaitHud();
       return;
     }
@@ -200,6 +215,7 @@ class MeadowScene extends Phaser.Scene {
     this.setHorseCollider(facing);
     this.updateHorseAnimation(gait, delta);
     this.emitDust(direction, gait, delta);
+    this.updateJump(time);
     this.updateGaitHud();
   }
 
@@ -227,6 +243,52 @@ class MeadowScene extends Phaser.Scene {
     this.horseShadow.setPosition(this.horse.x, this.horse.y + 31);
     this.horseShadow.setScale(1 - lift * 0.14, 1 - lift * 0.08);
     this.horseShadow.setAlpha(0.25 - lift * 0.08);
+  }
+
+  startJump(time) {
+    if (
+      this.isJumping ||
+      time < this.jumpCooldownUntil ||
+      time < this.knockbackUntil
+    ) {
+      return;
+    }
+
+    this.isJumping = true;
+    this.jumpStartedAt = time;
+    this.jumpCooldownUntil = time + JUMP_COOLDOWN_MS;
+  }
+
+  updateJump(time) {
+    if (!this.isJumping) {
+      this.horse.setDisplayOrigin(64, 64);
+      return;
+    }
+
+    const progress = Phaser.Math.Clamp(
+      (time - this.jumpStartedAt) / JUMP_DURATION_MS,
+      0,
+      1,
+    );
+    const arc = Math.sin(progress * Math.PI);
+    const height = Math.round(arc * JUMP_HEIGHT);
+
+    // Lift only the rendered sprite so the physics body keeps its trajectory.
+    this.horse.setDisplayOrigin(64, 64 + height);
+    this.horse.setScale(1 + arc * 0.06);
+    this.horseShadow.setScale(1 - arc * 0.38, 1 - arc * 0.24);
+    this.horseShadow.setAlpha(0.25 - arc * 0.18);
+
+    if (progress >= 1) {
+      this.isJumping = false;
+      this.horse.setDisplayOrigin(64, 64);
+      this.horse.setScale(1);
+      this.updateShadow(0);
+    }
+  }
+
+  canCollideWithObstacle() {
+    return !this.isJumping;
   }
 
   handleObstacleCollision(horse, obstacle) {
@@ -273,9 +335,13 @@ class MeadowScene extends Phaser.Scene {
     this.movementFrame = 0;
     this.animationAccumulator = 0;
     this.knockbackUntil = 0;
+    this.isJumping = false;
+    this.jumpStartedAt = 0;
+    this.jumpCooldownUntil = this.time.now + 500;
     this.hitCooldownUntil = this.time.now + 1200;
     this.horse.body.reset(START_X, START_Y);
     this.horse.setTexture("horse-n-idle");
+    this.horse.setDisplayOrigin(64, 64);
     this.horse.setScale(1);
     this.horse.setAngle(0);
     this.horse.clearTint();
@@ -311,6 +377,11 @@ class MeadowScene extends Phaser.Scene {
   }
 
   emitDust(direction, gait, delta) {
+    if (this.isJumping) {
+      this.dustTimer = 0;
+      return;
+    }
+
     if (!gait.dustInterval) {
       this.dustTimer = 0;
       return;
@@ -565,13 +636,71 @@ class MeadowScene extends Phaser.Scene {
     }
   }
 
+  addFlowers() {
+    const flowers = this.add.graphics();
+    flowers.setDepth(2);
+
+    const petalColors = [
+      0xffe36e,
+      0xf4f0d0,
+      0xf28ba8,
+      0xa98ee8,
+      0x80bde8,
+    ];
+    const random = new Phaser.Math.RandomDataGenerator(["horsin-flowers"]);
+
+    const drawFlower = (rawX, rawY, petalColor) => {
+      const x = Math.round(rawX / 2) * 2;
+      const y = Math.round(rawY / 2) * 2;
+
+      flowers.fillStyle(0x397432);
+      flowers.fillRect(x, y + 3, 2, 7);
+      flowers.fillStyle(petalColor);
+      flowers.fillRect(x - 2, y, 2, 2);
+      flowers.fillRect(x + 2, y, 2, 2);
+      flowers.fillRect(x, y - 2, 2, 2);
+      flowers.fillRect(x, y + 2, 2, 2);
+      flowers.fillStyle(0xf5bd3f);
+      flowers.fillRect(x, y, 2, 2);
+    };
+
+    const drawPatch = (x, y, flowerCount) => {
+      for (let i = 0; i < flowerCount; i += 1) {
+        drawFlower(
+          x + random.between(-18, 18),
+          y + random.between(-14, 14),
+          random.pick(petalColors),
+        );
+      }
+    };
+
+    const startingPatches = [
+      [START_X - 190, START_Y - 80],
+      [START_X + 160, START_Y - 110],
+      [START_X - 130, START_Y + 150],
+      [START_X + 210, START_Y + 135],
+      [START_X + 40, START_Y + 205],
+    ];
+    for (const [x, y] of startingPatches) {
+      drawPatch(x, y, random.between(3, 6));
+    }
+
+    for (let i = 0; i < 420; i += 1) {
+      drawPatch(
+        random.between(70, WORLD_WIDTH - 70),
+        random.between(70, WORLD_HEIGHT - 70),
+        random.between(1, 3),
+      );
+    }
+  }
+
   createHud() {
     // The main camera is zoomed, so fixed HUD coordinates need a small inset
     // to remain inside the visible top-left safe area.
     const hudOffsetX = 62;
     const hudOffsetY = 35;
     const panel = this.add
-      .rectangle(18 + hudOffsetX, 18 + hudOffsetY, 352, 178, 0x142416, 0.88)
+      .rectangle(18 + hudOffsetX, 18 + hudOffsetY, 250, 108, 0x142416, 0.88)
       .setOrigin(0)
       .setScrollFactor(0)
       .setDepth(100);
@@ -582,16 +711,16 @@ class MeadowScene extends Phaser.Scene {
         this.add
           .image(34 + hudOffsetX + i * 30, 29 + hudOffsetY, "heart-full")
           .setOrigin(0)
-          .setScale(1.5)
+          .setScale(1.25)
           .setScrollFactor(0)
           .setDepth(101),
       );
     }
 
     this.add
-      .text(136 + hudOffsetX, 29 + hudOffsetY, "HORSIN' AROUND", {
+      .text(126 + hudOffsetX, 29 + hudOffsetY, "HORSIN' AROUND", {
         fontFamily: '"Courier New", monospace',
-        fontSize: "17px",
+        fontSize: "13px",
         fontStyle: "bold",
         color: "#fff4bd",
         resolution: 2,
@@ -599,20 +728,10 @@ class MeadowScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(101);
 
-    this.add
-      .text(34 + hudOffsetX, 63 + hudOffsetY, "WASD MOVE  |  V WALK  |  SHIFT RUN", {
-        fontFamily: '"Courier New", monospace',
-        fontSize: "11px",
-        color: "#d9efb0",
-        resolution: 2,
-      })
-      .setScrollFactor(0)
-      .setDepth(101);
-
     this.gaitText = this.add
-      .text(34 + hudOffsetX, 86 + hudOffsetY, "GAIT: STANDING", {
+      .text(34 + hudOffsetX, 57 + hudOffsetY, "GAIT: STANDING", {
         fontFamily: '"Courier New", monospace',
-        fontSize: "15px",
+        fontSize: "13px",
         fontStyle: "bold",
         color: GAITS.idle.color,
         resolution: 2,
@@ -621,33 +740,23 @@ class MeadowScene extends Phaser.Scene {
       .setDepth(101);
 
     this.add
-      .rectangle(34 + hudOffsetX, 114 + hudOffsetY, 302, 7, 0x324735, 1)
+      .rectangle(34 + hudOffsetX, 79 + hudOffsetY, 218, 6, 0x324735, 1)
       .setOrigin(0)
       .setScrollFactor(0)
       .setDepth(101);
 
     this.gallopBar = this.add
-      .rectangle(34 + hudOffsetX, 114 + hudOffsetY, 302, 7, 0xff8a5b, 1)
+      .rectangle(34 + hudOffsetX, 79 + hudOffsetY, 218, 6, 0xff8a5b, 1)
       .setOrigin(0)
       .setScale(0, 1)
       .setScrollFactor(0)
       .setDepth(102);
 
     this.gallopText = this.add
-      .text(34 + hudOffsetX, 126 + hudOffsetY, "HOLD SHIFT WHILE MOVING TO GALLOP", {
+      .text(34 + hudOffsetX, 90 + hudOffsetY, "", {
         fontFamily: '"Courier New", monospace',
-        fontSize: "10px",
+        fontSize: "9px",
         color: "#a9bd9a",
-        resolution: 2,
-      })
-      .setScrollFactor(0)
-      .setDepth(101);
-
-    this.add
-      .text(34 + hudOffsetX, 151 + hudOffsetY, "TROT -1  |  CANTER -2  |  GALLOP -3", {
-        fontFamily: '"Courier New", monospace',
-        fontSize: "10px",
-        color: "#ffaaa2",
         resolution: 2,
       })
       .setScrollFactor(0)
@@ -672,7 +781,7 @@ class MeadowScene extends Phaser.Scene {
     );
 
     this.gaitText
-      .setText(`GAIT: ${gait.label}  |  ${gait.speed} SPEED`)
+      .setText(`GAIT: ${gait.label}`)
       .setColor(gait.color);
     this.gallopBar.setScale(progress, 1);
 
@@ -680,12 +789,10 @@ class MeadowScene extends Phaser.Scene {
       this.gallopText.setText("FULL GALLOP!").setColor(GAITS.gallop.color);
     } else if (this.currentGait === "canter") {
       this.gallopText
-        .setText(`GALLOP BUILDING: ${Math.floor(progress * 100)}%`)
+        .setText(`GALLOP: ${Math.floor(progress * 100)}%`)
         .setColor(GAITS.canter.color);
     } else {
-      this.gallopText
-        .setText("HOLD SHIFT WHILE MOVING TO GALLOP")
-        .setColor("#a9bd9a");
+      this.gallopText.setText("");
     }
   }
 }

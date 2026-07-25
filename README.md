@@ -27,7 +27,8 @@ down, backward, recovery). The cycle runs faster for each faster gait. The
 east/west profiles keep the visible eye, and the faster gaits kick up dust over
 an animated ground shadow.
 
-The horse has three hearts and the meadow contains solid fences and puddles.
+The horse has three hearts and the meadow contains colorful flower patches,
+solid fences, and puddles.
 V-walking into an obstacle is safe; hitting one at a trot costs one heart,
 at a canter costs two, and at a gallop costs all three. Losing every heart
 returns the horse to the starting position with three restored hearts.
