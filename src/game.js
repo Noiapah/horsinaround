@@ -3,6 +3,12 @@ const WORLD_HEIGHT = 6000;
 const START_X = WORLD_WIDTH / 2;
 const START_Y = WORLD_HEIGHT / 2;
 const MAX_LIVES = 3;
+const WORLD_VERSION = 2;
+const PROGRESS_SCHEMA_VERSION = 2;
+const PROGRESS_STORAGE_KEY = "horsin-around-progress";
+const AUTOSAVE_INTERVAL_MS = 5000;
+const SPAWN_CLEARANCE = 48;
+const CHUNK_SIZE = 1024;
 const HIT_COOLDOWN_MS = 900;
 const JUMP_DURATION_MS = 850;
 const JUMP_COOLDOWN_MS = 1050;
@@ -54,31 +60,256 @@ const GAITS = {
   },
 };
 
-class MeadowScene extends Phaser.Scene {
+const FACILITIES = [
+  {
+    id: "stable-main",
+    type: "stable",
+    name: "MEADOW STABLE",
+    sceneKey: "stable-interior",
+    texture: "stable-exterior",
+    x: START_X + 650,
+    y: START_Y + 70,
+    entrance: { x: START_X + 650, y: START_Y + 178 },
+    returnPosition: { x: START_X + 650, y: START_Y + 238 },
+    interiorSpawn: { x: 480, y: 525 },
+  },
+  {
+    id: "horse-hospital",
+    type: "hospital",
+    name: "HORSE HOSPITAL",
+    sceneKey: "hospital-interior",
+    texture: "hospital-exterior",
+    x: START_X - 680,
+    y: START_Y + 90,
+    entrance: { x: START_X - 680, y: START_Y + 198 },
+    returnPosition: { x: START_X - 680, y: START_Y + 258 },
+    interiorSpawn: { x: 480, y: 525 },
+  },
+  {
+    id: "trotting-track",
+    type: "track",
+    name: "TROTTING TRACK",
+    sceneKey: "track-interior",
+    texture: "track-exterior",
+    x: START_X,
+    y: START_Y - 680,
+    entrance: { x: START_X, y: START_Y - 572 },
+    returnPosition: { x: START_X, y: START_Y - 512 },
+    interiorSpawn: { x: 700, y: 760 },
+  },
+];
+const FACILITY_BY_ID = new Map(
+  FACILITIES.map((facility) => [facility.id, facility]),
+);
+const INTERIOR_SCENE_BY_FACILITY = new Map(
+  FACILITIES.map((facility) => [facility.id, facility.sceneKey]),
+);
+
+class HorseProgress {
+  constructor({
+    schemaVersion = PROGRESS_SCHEMA_VERSION,
+    worldVersion = WORLD_VERSION,
+    revision = 0,
+    lives = MAX_LIVES,
+    location = {
+      type: "world",
+      id: "meadow",
+      position: { x: START_X, y: START_Y },
+      entranceId: null,
+    },
+    records = {},
+    updatedAt = null,
+  } = {}) {
+    this.schemaVersion = schemaVersion;
+    this.worldVersion = worldVersion;
+    this.revision = revision;
+    this.lives = lives;
+    this.location = {
+      type: location.type,
+      id: location.id,
+      position: {
+        x: location.position.x,
+        y: location.position.y,
+      },
+      entranceId: location.entranceId ?? null,
+    };
+    this.records = { ...records };
+    this.updatedAt = updatedAt;
+  }
+
+  static createDefault() {
+    return new HorseProgress();
+  }
+
+  static fromJSON(value) {
+    if (!value || typeof value !== "object") {
+      return HorseProgress.createDefault();
+    }
+
+    // Version 1 stored position at the root. Keep it loadable.
+    const sourceLocation =
+      value.location && typeof value.location === "object"
+        ? value.location
+        : {
+            type: "world",
+            id: "meadow",
+            position: value.position,
+            entranceId: null,
+          };
+    const savedX = Number(sourceLocation.position?.x);
+    const savedY = Number(sourceLocation.position?.y);
+    const savedLives = Number(value.lives);
+    const savedRevision = Number(value.revision);
+    const isKnownInterior = INTERIOR_SCENE_BY_FACILITY.has(sourceLocation.id);
+    const locationType =
+      sourceLocation.type === "interior" && isKnownInterior
+        ? "interior"
+        : "world";
+
+    return new HorseProgress({
+      schemaVersion: PROGRESS_SCHEMA_VERSION,
+      worldVersion: Number.isInteger(value.worldVersion)
+        ? value.worldVersion
+        : WORLD_VERSION,
+      revision:
+        Number.isInteger(savedRevision) && savedRevision >= 0
+          ? savedRevision
+          : 0,
+      lives:
+        Number.isInteger(savedLives) && savedLives > 0
+          ? Math.min(savedLives, MAX_LIVES)
+          : MAX_LIVES,
+      location: {
+        type: locationType,
+        id: locationType === "interior" ? sourceLocation.id : "meadow",
+        position: {
+          x: Number.isFinite(savedX) ? savedX : START_X,
+          y: Number.isFinite(savedY) ? savedY : START_Y,
+        },
+        entranceId:
+          typeof sourceLocation.entranceId === "string"
+            ? sourceLocation.entranceId
+            : null,
+      },
+      records:
+        value.records && typeof value.records === "object"
+          ? value.records
+          : {},
+      updatedAt:
+        typeof value.updatedAt === "string" ? value.updatedAt : null,
+    });
+  }
+
+  setLocation(type, id, x, y, entranceId = null) {
+    this.location = {
+      type,
+      id,
+      position: {
+        x: Math.round(x * 100) / 100,
+        y: Math.round(y * 100) / 100,
+      },
+      entranceId,
+    };
+  }
+
+  markSaved() {
+    this.revision += 1;
+    this.updatedAt = new Date().toISOString();
+  }
+
+  toJSON() {
+    return {
+      schemaVersion: this.schemaVersion,
+      worldVersion: this.worldVersion,
+      revision: this.revision,
+      lives: this.lives,
+      location: {
+        ...this.location,
+        position: { ...this.location.position },
+      },
+      records: { ...this.records },
+      updatedAt: this.updatedAt,
+    };
+  }
+}
+
+class LocalProgressStore {
+  load() {
+    try {
+      const saved = window.localStorage.getItem(PROGRESS_STORAGE_KEY);
+      return saved
+        ? HorseProgress.fromJSON(JSON.parse(saved))
+        : HorseProgress.createDefault();
+    } catch (error) {
+      console.warn("Could not load saved progress.", error);
+      return HorseProgress.createDefault();
+    }
+  }
+
+  save(progress) {
+    try {
+      progress.markSaved();
+      window.localStorage.setItem(
+        PROGRESS_STORAGE_KEY,
+        JSON.stringify(progress),
+      );
+      return true;
+    } catch (error) {
+      console.warn("Could not save progress.", error);
+      return false;
+    }
+  }
+}
+
+class ProgressScene extends Phaser.Scene {
+  constructor(key) {
+    super(key);
+    this.autosaveElapsed = 0;
+    this.pageHideHandler = null;
+  }
+
+  get progress() {
+    return this.registry.get("progress");
+  }
+
+  get progressStore() {
+    return this.registry.get("progressStore");
+  }
+
+  saveLocation(type, id, x, y, entranceId = null, force = false, delta = 0) {
+    this.progress.setLocation(type, id, x, y, entranceId);
+    this.progress.worldVersion = WORLD_VERSION;
+    this.autosaveElapsed += delta;
+
+    if (force || this.autosaveElapsed >= AUTOSAVE_INTERVAL_MS) {
+      this.progressStore.save(this.progress);
+      this.autosaveElapsed = 0;
+    }
+  }
+
+  installPageSave(getLocation) {
+    this.pageHideHandler = () => {
+      if (!this.sys.isActive()) return;
+      const location = getLocation();
+      this.saveLocation(
+        location.type,
+        location.id,
+        location.x,
+        location.y,
+        location.entranceId,
+        true,
+      );
+    };
+    window.addEventListener("pagehide", this.pageHideHandler);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      window.removeEventListener("pagehide", this.pageHideHandler);
+    });
+  }
+}
+
+class BootScene extends Phaser.Scene {
   constructor() {
-    super("meadow");
-    this.horse = null;
-    this.keys = null;
-    this.isMoving = false;
-    this.gallopCharge = 0;
-    this.currentGait = "idle";
-    this.currentFacing = "n";
-    this.movementFrame = 0;
-    this.animationAccumulator = 0;
-    this.horseShadow = null;
-    this.obstacles = null;
-    this.dustTimer = 0;
-    this.lives = MAX_LIVES;
-    this.hitCooldownUntil = 0;
-    this.knockbackUntil = 0;
-    this.knockbackVelocity = new Phaser.Math.Vector2();
-    this.isJumping = false;
-    this.jumpStartedAt = 0;
-    this.jumpCooldownUntil = 0;
-    this.heartIcons = [];
-    this.gaitText = null;
-    this.gallopText = null;
-    this.gallopBar = null;
+    super("boot");
   }
 
   preload() {
@@ -97,25 +328,262 @@ class MeadowScene extends Phaser.Scene {
   }
 
   create() {
+    const store = new LocalProgressStore();
+    const progress = store.load();
+    this.registry.set("progressStore", store);
+    this.registry.set("progress", progress);
+
+    if (progress.location.type === "interior") {
+      const interiorScene = INTERIOR_SCENE_BY_FACILITY.get(
+        progress.location.id,
+      );
+      if (interiorScene) {
+        this.scene.start(interiorScene, {
+          facilityId: progress.location.id,
+        });
+        return;
+      }
+    }
+
+    this.scene.start("meadow");
+  }
+}
+
+class MeadowChunkManager {
+  constructor(scene) {
+    this.scene = scene;
+    this.activeChunks = new Map();
+    this.currentChunkKey = null;
+    this.radius = 1;
+    this.wantedChunks = new Set();
+    this.pendingChunks = [];
+    this.queuedChunks = new Set();
+  }
+
+  update(worldX, worldY) {
+    const centerX = Math.floor(worldX / CHUNK_SIZE);
+    const centerY = Math.floor(worldY / CHUNK_SIZE);
+    const centerKey = `${centerX}:${centerY}`;
+    if (centerKey === this.currentChunkKey) {
+      this.loadNextChunk();
+      return;
+    }
+    this.currentChunkKey = centerKey;
+
+    const wanted = new Set();
+    const maximumChunkX = Math.ceil(WORLD_WIDTH / CHUNK_SIZE) - 1;
+    const maximumChunkY = Math.ceil(WORLD_HEIGHT / CHUNK_SIZE) - 1;
+
+    for (
+      let chunkY = centerY - this.radius;
+      chunkY <= centerY + this.radius;
+      chunkY += 1
+    ) {
+      for (
+        let chunkX = centerX - this.radius;
+        chunkX <= centerX + this.radius;
+        chunkX += 1
+      ) {
+        if (
+          chunkX < 0 ||
+          chunkY < 0 ||
+          chunkX > maximumChunkX ||
+          chunkY > maximumChunkY
+        ) {
+          continue;
+        }
+        const key = `${chunkX}:${chunkY}`;
+        wanted.add(key);
+        if (
+          !this.activeChunks.has(key) &&
+          !this.queuedChunks.has(key)
+        ) {
+          this.pendingChunks.push({ key, chunkX, chunkY });
+          this.queuedChunks.add(key);
+        }
+      }
+    }
+    this.wantedChunks = wanted;
+    this.pendingChunks.sort((a, b) => {
+      const distanceA =
+        Math.abs(a.chunkX - centerX) + Math.abs(a.chunkY - centerY);
+      const distanceB =
+        Math.abs(b.chunkX - centerX) + Math.abs(b.chunkY - centerY);
+      return distanceA - distanceB;
+    });
+
+    for (const [key, layers] of this.activeChunks) {
+      if (wanted.has(key)) continue;
+      layers.details.destroy();
+      layers.flowers.destroy();
+      this.activeChunks.delete(key);
+    }
+
+    this.loadNextChunk();
+  }
+
+  loadNextChunk() {
+    while (this.pendingChunks.length > 0) {
+      const pending = this.pendingChunks.shift();
+      this.queuedChunks.delete(pending.key);
+      if (
+        !this.wantedChunks.has(pending.key) ||
+        this.activeChunks.has(pending.key)
+      ) {
+        continue;
+      }
+      this.activeChunks.set(
+        pending.key,
+        this.createChunk(pending.chunkX, pending.chunkY),
+      );
+      return;
+    }
+  }
+
+  createChunk(chunkX, chunkY) {
+    const random = new Phaser.Math.RandomDataGenerator([
+      `horsin-chunk:${WORLD_VERSION}:${chunkX}:${chunkY}`,
+    ]);
+    const originX = chunkX * CHUNK_SIZE;
+    const originY = chunkY * CHUNK_SIZE;
+    const chunkWidth = Math.min(CHUNK_SIZE, WORLD_WIDTH - originX);
+    const chunkHeight = Math.min(CHUNK_SIZE, WORLD_HEIGHT - originY);
+    const details = this.scene.add.graphics().setDepth(1);
+    const flowers = this.scene.add.graphics().setDepth(2);
+    const petalColors = [
+      0xffe36e,
+      0xf4f0d0,
+      0xf28ba8,
+      0xa98ee8,
+      0x80bde8,
+    ];
+
+    for (let i = 0; i < 8; i += 1) {
+      const x = originX + random.between(35, chunkWidth - 35);
+      const y = originY + random.between(35, chunkHeight - 35);
+      const shade = random.pick([0x4b8337, 0x77ad53, 0x538d3c]);
+      details.fillStyle(shade, 0.7);
+      details.fillRect(x, y, 4, random.pick([4, 8]));
+      details.fillRect(x - 4, y + 4, 4, 4);
+      details.fillRect(x + 4, y, 4, 4);
+    }
+
+    const drawFlower = (rawX, rawY, petalColor) => {
+      const x = Math.round(rawX / 2) * 2;
+      const y = Math.round(rawY / 2) * 2;
+      flowers.fillStyle(0x397432);
+      flowers.fillRect(x, y + 3, 2, 7);
+      flowers.fillStyle(petalColor);
+      flowers.fillRect(x - 2, y, 2, 2);
+      flowers.fillRect(x + 2, y, 2, 2);
+      flowers.fillRect(x, y - 2, 2, 2);
+      flowers.fillRect(x, y + 2, 2, 2);
+      flowers.fillStyle(0xf5bd3f);
+      flowers.fillRect(x, y, 2, 2);
+    };
+
+    for (let patch = 0; patch < 10; patch += 1) {
+      const patchX = originX + random.between(35, chunkWidth - 35);
+      const patchY = originY + random.between(35, chunkHeight - 35);
+      const flowerCount = random.between(1, 3);
+      for (let flower = 0; flower < flowerCount; flower += 1) {
+        drawFlower(
+          patchX + random.between(-18, 18),
+          patchY + random.between(-14, 14),
+          random.pick(petalColors),
+        );
+      }
+    }
+
+    if (
+      START_X >= originX &&
+      START_X < originX + chunkWidth &&
+      START_Y >= originY &&
+      START_Y < originY + chunkHeight
+    ) {
+      const startingPatches = [
+        [-190, -80],
+        [160, -110],
+        [-130, 150],
+        [210, 135],
+        [40, 205],
+      ];
+      for (const [offsetX, offsetY] of startingPatches) {
+        for (let flower = 0; flower < 4; flower += 1) {
+          drawFlower(
+            START_X + offsetX + random.between(-16, 16),
+            START_Y + offsetY + random.between(-12, 12),
+            random.pick(petalColors),
+          );
+        }
+      }
+    }
+
+    return { details, flowers };
+  }
+}
+
+class MeadowScene extends ProgressScene {
+  constructor() {
+    super("meadow");
+    this.horse = null;
+    this.keys = null;
+    this.isMoving = false;
+    this.gallopCharge = 0;
+    this.currentGait = "idle";
+    this.currentFacing = "n";
+    this.movementFrame = 0;
+    this.animationAccumulator = 0;
+    this.horseShadow = null;
+    this.obstacles = null;
+    this.structureColliders = null;
+    this.facilitySprites = [];
+    this.nearbyFacility = null;
+    this.entrancePrompt = null;
+    this.isTransitioning = false;
+    this.chunkManager = null;
+    this.dustTimer = 0;
+    this.hitCooldownUntil = 0;
+    this.knockbackUntil = 0;
+    this.knockbackVelocity = new Phaser.Math.Vector2();
+    this.isJumping = false;
+    this.jumpStartedAt = 0;
+    this.jumpCooldownUntil = 0;
+    this.heartIcons = [];
+    this.gaitText = null;
+    this.gallopText = null;
+    this.gallopBar = null;
+  }
+
+  create() {
     this.createGrassTexture();
     this.createObstacleTextures();
+    this.createFacilityTextures();
     this.createHeartTextures();
     this.add
       .tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, "grass")
       .setOrigin(0);
 
-    this.addWorldDetails();
-    this.addFlowers();
+    this.createWorldBorder();
     this.createObstacles();
+    this.createFacilities();
 
     this.physics.world.setBounds(24, 24, WORLD_WIDTH - 48, WORLD_HEIGHT - 48);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.setBackgroundColor("#5c963f");
 
+    const savedPosition =
+      this.progress.location.type === "world"
+        ? this.progress.location.position
+        : { x: START_X, y: START_Y };
+    const spawn = this.findSafeWorldSpawn(savedPosition);
+    this.progress.setLocation("world", "meadow", spawn.x, spawn.y);
+    this.progress.worldVersion = WORLD_VERSION;
+
     this.horseShadow = this.add
       .ellipse(
-        START_X,
-        START_Y + 30,
+        spawn.x,
+        spawn.y + 30,
         54,
         16,
         0x1b2b18,
@@ -124,7 +592,7 @@ class MeadowScene extends Phaser.Scene {
       .setDepth(9);
 
     this.horse = this.physics.add
-      .sprite(START_X, START_Y, "horse-n-idle")
+      .sprite(spawn.x, spawn.y, "horse-n-idle")
       .setDepth(10)
       .setCollideWorldBounds(true);
 
@@ -136,6 +604,7 @@ class MeadowScene extends Phaser.Scene {
       this.canCollideWithObstacle,
       this,
     );
+    this.physics.add.collider(this.horse, this.structureColliders);
 
     this.cameras.main.startFollow(this.horse, true, 0.09, 0.09);
     this.cameras.main.setZoom(1.15);
@@ -148,6 +617,7 @@ class MeadowScene extends Phaser.Scene {
       walk: Phaser.Input.Keyboard.KeyCodes.V,
       run: Phaser.Input.Keyboard.KeyCodes.SHIFT,
       jump: Phaser.Input.Keyboard.KeyCodes.SPACE,
+      enter: Phaser.Input.Keyboard.KeyCodes.E,
     });
 
     this.input.keyboard.addCapture([
@@ -158,12 +628,52 @@ class MeadowScene extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.V,
       Phaser.Input.Keyboard.KeyCodes.SHIFT,
       Phaser.Input.Keyboard.KeyCodes.SPACE,
+      Phaser.Input.Keyboard.KeyCodes.E,
     ]);
 
+    this.entrancePrompt = this.add
+      .text(0, 0, "", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#fff4bd",
+        backgroundColor: "#142416",
+        padding: { x: 6, y: 4 },
+        resolution: 2,
+      })
+      .setOrigin(0.5)
+      .setDepth(40)
+      .setVisible(false);
+
+    this.chunkManager = new MeadowChunkManager(this);
+    this.chunkManager.update(this.horse.x, this.horse.y);
     this.createHud();
+    this.installPageSave(() => ({
+      type: "world",
+      id: "meadow",
+      x: this.horse.x,
+      y: this.horse.y,
+      entranceId: null,
+    }));
+    this.progressStore.save(this.progress);
   }
 
   update(time, delta) {
+    if (this.isTransitioning) {
+      this.horse.setVelocity(0, 0);
+      return;
+    }
+
+    this.updateWorldSystems(delta);
+    if (
+      this.nearbyFacility &&
+      !this.isJumping &&
+      Phaser.Input.Keyboard.JustDown(this.keys.enter)
+    ) {
+      this.enterFacility(this.nearbyFacility);
+      return;
+    }
+
     if (Phaser.Input.Keyboard.JustDown(this.keys.jump)) {
       this.startJump(time);
     }
@@ -245,6 +755,185 @@ class MeadowScene extends Phaser.Scene {
     this.horseShadow.setAlpha(0.25 - lift * 0.08);
   }
 
+  updateWorldSystems(delta) {
+    this.chunkManager?.update(this.horse.x, this.horse.y);
+    this.saveLocation(
+      "world",
+      "meadow",
+      this.horse.x,
+      this.horse.y,
+      null,
+      false,
+      delta,
+    );
+
+    let closest = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const facility of FACILITIES) {
+      const distance = Phaser.Math.Distance.Between(
+        this.horse.x,
+        this.horse.y,
+        facility.entrance.x,
+        facility.entrance.y,
+      );
+      if (distance < 115 && distance < closestDistance) {
+        closest = facility;
+        closestDistance = distance;
+      }
+    }
+
+    this.nearbyFacility = closest;
+    if (closest) {
+      this.entrancePrompt
+        .setText(`E  ENTER ${closest.name}`)
+        .setPosition(closest.entrance.x, closest.entrance.y - 52)
+        .setVisible(true);
+    } else {
+      this.entrancePrompt.setVisible(false);
+    }
+  }
+
+  enterFacility(facility) {
+    this.isTransitioning = true;
+    this.horse.setVelocity(0, 0);
+    this.entrancePrompt.setVisible(false);
+    this.progress.setLocation(
+      "interior",
+      facility.id,
+      facility.interiorSpawn.x,
+      facility.interiorSpawn.y,
+      "front-door",
+    );
+    this.progressStore.save(this.progress);
+    this.cameras.main.fadeOut(240, 20, 36, 22);
+
+    this.time.delayedCall(250, () => {
+      const interior = this.scene.get(facility.sceneKey);
+      if (interior.sys.isSleeping()) {
+        interior.prepareForEntry();
+        this.scene.wake(facility.sceneKey);
+      } else {
+        this.scene.launch(facility.sceneKey, {
+          facilityId: facility.id,
+        });
+      }
+      this.scene.sleep();
+    });
+  }
+
+  prepareReturnFromFacility(facility) {
+    const returnPosition = this.findSafeWorldSpawn(
+      facility.returnPosition,
+    );
+    this.progress.setLocation(
+      "world",
+      "meadow",
+      returnPosition.x,
+      returnPosition.y,
+      facility.id,
+    );
+    this.horse.body.reset(returnPosition.x, returnPosition.y);
+    this.horse.setVelocity(0, 0);
+    this.horse.setTexture("horse-s-idle");
+    this.horse.setDisplayOrigin(64, 64);
+    this.horse.setScale(1);
+    this.horse.clearTint();
+    this.currentFacing = "s";
+    this.currentGait = "idle";
+    this.isJumping = false;
+    this.isTransitioning = false;
+    this.nearbyFacility = null;
+    this.entrancePrompt.setVisible(false);
+    this.keys.enter.reset();
+    this.horseShadow.setPosition(
+      returnPosition.x,
+      returnPosition.y + 31,
+    );
+    this.chunkManager.update(returnPosition.x, returnPosition.y);
+    this.updateHearts();
+    this.updateGaitHud();
+    this.cameras.main.fadeIn(180, 20, 36, 22);
+  }
+
+  isWorldPositionSafe(x, y) {
+    if (
+      x < 24 + SPAWN_CLEARANCE ||
+      x > WORLD_WIDTH - 24 - SPAWN_CLEARANCE ||
+      y < 24 + SPAWN_CLEARANCE ||
+      y > WORLD_HEIGHT - 24 - SPAWN_CLEARANCE
+    ) {
+      return false;
+    }
+
+    const collisionGroups = [this.obstacles, this.structureColliders];
+    for (const group of collisionGroups) {
+      for (const obstacle of group.getChildren()) {
+        const body = obstacle.body;
+        if (
+          x + SPAWN_CLEARANCE > body.left &&
+          x - SPAWN_CLEARANCE < body.right &&
+          y + SPAWN_CLEARANCE > body.top &&
+          y - SPAWN_CLEARANCE < body.bottom
+        ) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  findSafeWorldSpawn(savedPosition) {
+    const requestedX = Number.isFinite(savedPosition?.x)
+      ? savedPosition.x
+      : START_X;
+    const requestedY = Number.isFinite(savedPosition?.y)
+      ? savedPosition.y
+      : START_Y;
+    const origin = {
+      x: Phaser.Math.Clamp(
+        requestedX,
+        24 + SPAWN_CLEARANCE,
+        WORLD_WIDTH - 24 - SPAWN_CLEARANCE,
+      ),
+      y: Phaser.Math.Clamp(
+        requestedY,
+        24 + SPAWN_CLEARANCE,
+        WORLD_HEIGHT - 24 - SPAWN_CLEARANCE,
+      ),
+    };
+
+    if (this.isWorldPositionSafe(origin.x, origin.y)) return origin;
+
+    const nearby = this.searchForSafeWorldPosition(origin);
+    if (nearby) return nearby;
+
+    const fallback = { x: START_X, y: START_Y };
+    return this.isWorldPositionSafe(fallback.x, fallback.y)
+      ? fallback
+      : this.searchForSafeWorldPosition(fallback, 2048) ?? fallback;
+  }
+
+  searchForSafeWorldPosition(origin, maximumRadius = 1024) {
+    const step = 64;
+    for (let radius = step; radius <= maximumRadius; radius += step) {
+      for (let offset = -radius; offset <= radius; offset += step) {
+        const candidates = [
+          { x: origin.x + offset, y: origin.y - radius },
+          { x: origin.x + offset, y: origin.y + radius },
+          { x: origin.x - radius, y: origin.y + offset },
+          { x: origin.x + radius, y: origin.y + offset },
+        ];
+        for (const candidate of candidates) {
+          if (this.isWorldPositionSafe(candidate.x, candidate.y)) {
+            return candidate;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   startJump(time) {
     if (
       this.isJumping ||
@@ -303,7 +992,7 @@ class MeadowScene extends Phaser.Scene {
     }
 
     this.hitCooldownUntil = now + HIT_COOLDOWN_MS;
-    this.lives -= damage;
+    this.progress.lives -= damage;
     this.updateHearts();
     this.showCollisionMessage(`-${damage} HEART${damage > 1 ? "S" : ""}`, "#ff776d");
     this.cameras.main.shake(130 + damage * 35, 0.004 + damage * 0.002);
@@ -322,13 +1011,25 @@ class MeadowScene extends Phaser.Scene {
     this.knockbackVelocity.copy(away).scale(190 + damage * 35);
     this.knockbackUntil = now + 260;
 
-    if (this.lives <= 0) {
+    if (this.progress.lives <= 0) {
       this.resetHorse();
+    } else {
+      this.progressStore.save(this.progress);
     }
   }
 
   resetHorse() {
-    this.lives = MAX_LIVES;
+    const resetPosition = this.findSafeWorldSpawn({
+      x: START_X,
+      y: START_Y,
+    });
+    this.progress.lives = MAX_LIVES;
+    this.progress.setLocation(
+      "world",
+      "meadow",
+      resetPosition.x,
+      resetPosition.y,
+    );
     this.gallopCharge = 0;
     this.currentGait = "idle";
     this.currentFacing = "n";
@@ -339,17 +1040,21 @@ class MeadowScene extends Phaser.Scene {
     this.jumpStartedAt = 0;
     this.jumpCooldownUntil = this.time.now + 500;
     this.hitCooldownUntil = this.time.now + 1200;
-    this.horse.body.reset(START_X, START_Y);
+    this.horse.body.reset(resetPosition.x, resetPosition.y);
     this.horse.setTexture("horse-n-idle");
     this.horse.setDisplayOrigin(64, 64);
     this.horse.setScale(1);
     this.horse.setAngle(0);
     this.horse.clearTint();
-    this.horseShadow.setPosition(START_X, START_Y + 31);
+    this.horseShadow.setPosition(
+      resetPosition.x,
+      resetPosition.y + 31,
+    );
     this.updateHearts();
     this.showCollisionMessage("BACK TO THE PADDOCK!", "#fff4bd");
     this.cameras.main.flash(220, 255, 244, 189, false);
     this.updateGaitHud();
+    this.progressStore.save(this.progress);
   }
 
   showCollisionMessage(message, color) {
@@ -465,6 +1170,14 @@ class MeadowScene extends Phaser.Scene {
   }
 
   createObstacleTextures() {
+    if (
+      this.textures.exists("puddle") &&
+      this.textures.exists("fence-horizontal") &&
+      this.textures.exists("fence-vertical")
+    ) {
+      return;
+    }
+
     const puddle = this.make.graphics({ x: 0, y: 0, add: false });
     puddle.fillStyle(0x213d52);
     puddle.fillRect(16, 8, 64, 8);
@@ -483,7 +1196,109 @@ class MeadowScene extends Phaser.Scene {
     this.createFenceTexture("fence-vertical", true);
   }
 
+  createFacilityTextures() {
+    if (!this.textures.exists("stable-exterior")) {
+      const stable = this.make.graphics({ x: 0, y: 0, add: false });
+      stable.fillStyle(0x25301f, 0.35);
+      stable.fillRect(12, 166, 232, 18);
+      stable.fillStyle(0x56331e);
+      stable.fillRect(20, 58, 216, 112);
+      stable.fillStyle(0x9b4d2a);
+      stable.fillRect(30, 70, 196, 92);
+      stable.fillStyle(0x3b2419);
+      stable.fillTriangle(8, 62, 128, 4, 248, 62);
+      stable.fillStyle(0x71361f);
+      stable.fillTriangle(24, 62, 128, 16, 232, 62);
+      stable.fillStyle(0x2e2118);
+      stable.fillRect(102, 112, 52, 58);
+      stable.fillStyle(0xd6a35b);
+      stable.fillRect(108, 118, 17, 46);
+      stable.fillRect(131, 118, 17, 46);
+      stable.fillStyle(0xf4d58a);
+      stable.fillRect(50, 88, 30, 26);
+      stable.fillRect(176, 88, 30, 26);
+      stable.generateTexture("stable-exterior", 256, 192);
+      stable.destroy();
+    }
+
+    if (!this.textures.exists("hospital-exterior")) {
+      const hospital = this.make.graphics({ x: 0, y: 0, add: false });
+      hospital.fillStyle(0x25301f, 0.35);
+      hospital.fillRect(12, 166, 232, 18);
+      hospital.fillStyle(0xd8d6c5);
+      hospital.fillRect(20, 52, 216, 118);
+      hospital.fillStyle(0xf2eed8);
+      hospital.fillRect(30, 62, 196, 100);
+      hospital.fillStyle(0x3d5961);
+      hospital.fillRect(10, 42, 236, 20);
+      hospital.fillStyle(0x31505b);
+      hospital.fillRect(20, 32, 216, 14);
+      hospital.fillStyle(0x3a3b35);
+      hospital.fillRect(104, 112, 48, 58);
+      hospital.fillStyle(0x8dc2c8);
+      hospital.fillRect(110, 118, 16, 46);
+      hospital.fillRect(130, 118, 16, 46);
+      hospital.fillStyle(0xd74747);
+      hospital.fillRect(116, 70, 24, 58);
+      hospital.fillRect(99, 87, 58, 24);
+      hospital.generateTexture("hospital-exterior", 256, 192);
+      hospital.destroy();
+    }
+
+    if (!this.textures.exists("track-exterior")) {
+      const track = this.make.graphics({ x: 0, y: 0, add: false });
+      track.fillStyle(0x25301f, 0.35);
+      track.fillRect(10, 164, 300, 18);
+      track.fillStyle(0x3a2417);
+      track.fillRect(24, 68, 18, 104);
+      track.fillRect(278, 68, 18, 104);
+      track.fillRect(38, 66, 244, 18);
+      track.fillStyle(0xa8632e);
+      track.fillRect(30, 60, 18, 104);
+      track.fillRect(272, 60, 18, 104);
+      track.fillRect(42, 58, 236, 18);
+      track.fillStyle(0xf0c875);
+      track.fillRect(74, 18, 172, 48);
+      track.fillStyle(0x53341f);
+      track.fillRect(82, 26, 156, 32);
+      track.generateTexture("track-exterior", 320, 192);
+      track.destroy();
+    }
+  }
+
+  createFacilities() {
+    this.structureColliders = this.physics.add.staticGroup();
+
+    for (const facility of FACILITIES) {
+      const structure = this.structureColliders
+        .create(facility.x, facility.y, facility.texture)
+        .setDepth(8);
+      if (facility.type === "track") {
+        structure.body.setSize(286, 120);
+      } else {
+        structure.body.setSize(226, 142);
+      }
+      structure.body.updateFromGameObject();
+      this.facilitySprites.push(structure);
+
+      this.add
+        .text(facility.x, facility.y - 116, facility.name, {
+          fontFamily: '"Courier New", monospace',
+          fontSize: "12px",
+          fontStyle: "bold",
+          color: "#fff4bd",
+          backgroundColor: "#273b25",
+          padding: { x: 5, y: 3 },
+          resolution: 2,
+        })
+        .setOrigin(0.5)
+        .setDepth(9);
+    }
+  }
+
   createFenceTexture(key, vertical) {
+    if (this.textures.exists(key)) return;
+
     const width = vertical ? 64 : 128;
     const height = vertical ? 128 : 64;
     const fence = this.make.graphics({ x: 0, y: 0, add: false });
@@ -571,6 +1386,13 @@ class MeadowScene extends Phaser.Scene {
   }
 
   createHeartTextures() {
+    if (
+      this.textures.exists("heart-full") &&
+      this.textures.exists("heart-empty")
+    ) {
+      return;
+    }
+
     const createHeart = (key, fillColor) => {
       const heart = this.make.graphics({ x: 0, y: 0, add: false });
       heart.fillStyle(0x3b1f21);
@@ -593,6 +1415,8 @@ class MeadowScene extends Phaser.Scene {
   }
 
   createGrassTexture() {
+    if (this.textures.exists("grass")) return;
+
     const texture = this.make.graphics({ x: 0, y: 0, add: false });
     texture.fillStyle(0x5f9d45);
     texture.fillRect(0, 0, 32, 32);
@@ -614,84 +1438,14 @@ class MeadowScene extends Phaser.Scene {
     texture.destroy();
   }
 
-  addWorldDetails() {
+  createWorldBorder() {
     const detail = this.add.graphics();
     detail.setDepth(1);
 
-    // A darker pixel border makes the edge of the current playable field clear.
     detail.lineStyle(16, 0x3e7132, 1);
     detail.strokeRect(8, 8, WORLD_WIDTH - 16, WORLD_HEIGHT - 16);
     detail.lineStyle(4, 0x82b85d, 1);
     detail.strokeRect(20, 20, WORLD_WIDTH - 40, WORLD_HEIGHT - 40);
-
-    const random = new Phaser.Math.RandomDataGenerator(["horsin-around"]);
-    for (let i = 0; i < 320; i += 1) {
-      const x = random.between(45, WORLD_WIDTH - 45);
-      const y = random.between(45, WORLD_HEIGHT - 45);
-      const shade = random.pick([0x4b8337, 0x77ad53, 0x538d3c]);
-      detail.fillStyle(shade, 0.7);
-      detail.fillRect(x, y, 4, random.pick([4, 8]));
-      detail.fillRect(x - 4, y + 4, 4, 4);
-      detail.fillRect(x + 4, y, 4, 4);
-    }
-  }
-
-  addFlowers() {
-    const flowers = this.add.graphics();
-    flowers.setDepth(2);
-
-    const petalColors = [
-      0xffe36e,
-      0xf4f0d0,
-      0xf28ba8,
-      0xa98ee8,
-      0x80bde8,
-    ];
-    const random = new Phaser.Math.RandomDataGenerator(["horsin-flowers"]);
-
-    const drawFlower = (rawX, rawY, petalColor) => {
-      const x = Math.round(rawX / 2) * 2;
-      const y = Math.round(rawY / 2) * 2;
-
-      flowers.fillStyle(0x397432);
-      flowers.fillRect(x, y + 3, 2, 7);
-      flowers.fillStyle(petalColor);
-      flowers.fillRect(x - 2, y, 2, 2);
-      flowers.fillRect(x + 2, y, 2, 2);
-      flowers.fillRect(x, y - 2, 2, 2);
-      flowers.fillRect(x, y + 2, 2, 2);
-      flowers.fillStyle(0xf5bd3f);
-      flowers.fillRect(x, y, 2, 2);
-    };
-
-    const drawPatch = (x, y, flowerCount) => {
-      for (let i = 0; i < flowerCount; i += 1) {
-        drawFlower(
-          x + random.between(-18, 18),
-          y + random.between(-14, 14),
-          random.pick(petalColors),
-        );
-      }
-    };
-
-    const startingPatches = [
-      [START_X - 190, START_Y - 80],
-      [START_X + 160, START_Y - 110],
-      [START_X - 130, START_Y + 150],
-      [START_X + 210, START_Y + 135],
-      [START_X + 40, START_Y + 205],
-    ];
-    for (const [x, y] of startingPatches) {
-      drawPatch(x, y, random.between(3, 6));
-    }
-
-    for (let i = 0; i < 420; i += 1) {
-      drawPatch(
-        random.between(70, WORLD_WIDTH - 70),
-        random.between(70, WORLD_HEIGHT - 70),
-        random.between(1, 3),
-      );
-    }
   }
 
   createHud() {
@@ -768,7 +1522,9 @@ class MeadowScene extends Phaser.Scene {
 
   updateHearts() {
     for (let i = 0; i < this.heartIcons.length; i += 1) {
-      this.heartIcons[i].setTexture(i < this.lives ? "heart-full" : "heart-empty");
+      this.heartIcons[i].setTexture(
+        i < this.progress.lives ? "heart-full" : "heart-empty",
+      );
     }
   }
 
@@ -797,6 +1553,609 @@ class MeadowScene extends Phaser.Scene {
   }
 }
 
+class BaseInteriorScene extends ProgressScene {
+  constructor(key, facilityId, width = 960, height = 640) {
+    super(key);
+    this.facilityId = facilityId;
+    this.interiorWidth = width;
+    this.interiorHeight = height;
+    this.facility = null;
+    this.horse = null;
+    this.horseShadow = null;
+    this.wallGroup = null;
+    this.keys = null;
+    this.currentFacing = "n";
+    this.movementFrame = 0;
+    this.animationAccumulator = 0;
+    this.exitPoint = { x: width / 2, y: height - 44 };
+    this.exitPrompt = null;
+    this.isTransitioning = false;
+  }
+
+  init(data) {
+    this.facilityId = data?.facilityId ?? this.facilityId;
+  }
+
+  create() {
+    this.facility = FACILITY_BY_ID.get(this.facilityId);
+    if (!this.facility) {
+      this.scene.start("meadow");
+      return;
+    }
+
+    this.createCollisionTexture();
+    this.wallGroup = this.physics.add.staticGroup();
+    this.buildInterior();
+    this.createBoundaryWalls();
+
+    const savedPosition =
+      this.progress.location.type === "interior" &&
+      this.progress.location.id === this.facility.id
+        ? this.progress.location.position
+        : this.facility.interiorSpawn;
+    const spawn = this.findSafeInteriorSpawn(savedPosition);
+    this.progress.setLocation(
+      "interior",
+      this.facility.id,
+      spawn.x,
+      spawn.y,
+      "front-door",
+    );
+
+    this.horseShadow = this.add
+      .ellipse(spawn.x, spawn.y + 30, 54, 16, 0x151b14, 0.28)
+      .setDepth(19);
+    this.horse = this.physics.add
+      .sprite(spawn.x, spawn.y, "horse-n-idle")
+      .setDepth(20)
+      .setCollideWorldBounds(true);
+    this.physics.world.setBounds(
+      24,
+      24,
+      this.interiorWidth - 48,
+      this.interiorHeight - 48,
+    );
+    this.physics.add.collider(this.horse, this.wallGroup);
+    this.setHorseCollider("n");
+
+    this.keys = this.input.keyboard.addKeys({
+      up: Phaser.Input.Keyboard.KeyCodes.W,
+      left: Phaser.Input.Keyboard.KeyCodes.A,
+      down: Phaser.Input.Keyboard.KeyCodes.S,
+      right: Phaser.Input.Keyboard.KeyCodes.D,
+      walk: Phaser.Input.Keyboard.KeyCodes.V,
+      run: Phaser.Input.Keyboard.KeyCodes.SHIFT,
+      exit: Phaser.Input.Keyboard.KeyCodes.E,
+    });
+    this.input.keyboard.addCapture([
+      Phaser.Input.Keyboard.KeyCodes.W,
+      Phaser.Input.Keyboard.KeyCodes.A,
+      Phaser.Input.Keyboard.KeyCodes.S,
+      Phaser.Input.Keyboard.KeyCodes.D,
+      Phaser.Input.Keyboard.KeyCodes.V,
+      Phaser.Input.Keyboard.KeyCodes.SHIFT,
+      Phaser.Input.Keyboard.KeyCodes.E,
+    ]);
+
+    this.exitPrompt = this.add
+      .text(this.exitPoint.x, this.exitPoint.y - 48, "E  RETURN TO MEADOW", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#fff4bd",
+        backgroundColor: "#142416",
+        padding: { x: 6, y: 4 },
+        resolution: 2,
+      })
+      .setOrigin(0.5)
+      .setDepth(40)
+      .setVisible(false);
+
+    this.add
+      .text(18, 18, this.facility.name, {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "16px",
+        fontStyle: "bold",
+        color: "#fff4bd",
+        backgroundColor: "#142416",
+        padding: { x: 8, y: 5 },
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(100);
+
+    this.cameras.main.setBounds(
+      0,
+      0,
+      this.interiorWidth,
+      this.interiorHeight,
+    );
+    this.cameras.main.startFollow(this.horse, true, 0.12, 0.12);
+    this.cameras.main.setBackgroundColor("#182418");
+    this.cameras.main.fadeIn(220, 20, 36, 22);
+
+    this.onFacilityEntered();
+    this.progressStore.save(this.progress);
+    this.installPageSave(() => ({
+      type: "interior",
+      id: this.facility.id,
+      x: this.horse.x,
+      y: this.horse.y,
+      entranceId: "front-door",
+    }));
+  }
+
+  prepareForEntry() {
+    const spawn = this.findSafeInteriorSpawn(
+      this.progress.location.position,
+    );
+    this.progress.setLocation(
+      "interior",
+      this.facility.id,
+      spawn.x,
+      spawn.y,
+      "front-door",
+    );
+    this.horse.body.reset(spawn.x, spawn.y);
+    this.horse.setVelocity(0, 0);
+    this.horse.setTexture("horse-n-idle");
+    this.horse.setDisplayOrigin(64, 64);
+    this.horse.setScale(1);
+    this.currentFacing = "n";
+    this.movementFrame = 0;
+    this.animationAccumulator = 0;
+    this.horseShadow.setPosition(spawn.x, spawn.y + 31);
+    this.exitPrompt.setVisible(false);
+    this.keys.exit.reset();
+    this.isTransitioning = false;
+    this.onFacilityEntered();
+    this.progressStore.save(this.progress);
+    this.cameras.main.fadeIn(180, 20, 36, 22);
+  }
+
+  update(time, delta) {
+    if (this.isTransitioning || !this.horse) return;
+
+    const horizontal =
+      Number(this.keys.right.isDown) - Number(this.keys.left.isDown);
+    const vertical =
+      Number(this.keys.down.isDown) - Number(this.keys.up.isDown);
+    const direction = new Phaser.Math.Vector2(horizontal, vertical);
+    const isMoving = direction.lengthSq() > 0;
+
+    if (isMoving) {
+      const speed = this.keys.walk.isDown
+        ? GAITS.walk.speed
+        : this.keys.run.isDown
+          ? GAITS.canter.speed
+          : 190;
+      direction.normalize();
+      this.horse.setVelocity(direction.x * speed, direction.y * speed);
+      this.currentFacing = this.getFacingDirection(horizontal, vertical);
+      this.setHorseCollider(this.currentFacing);
+      this.animationAccumulator += delta;
+      const frameDuration = 1000 / (this.keys.run.isDown ? 8 : 6);
+      while (this.animationAccumulator >= frameDuration) {
+        this.animationAccumulator -= frameDuration;
+        this.movementFrame = (this.movementFrame + 1) % 4;
+      }
+      this.horse.setTexture(
+        `horse-${this.currentFacing}-walk-${this.movementFrame}`,
+      );
+    } else {
+      this.horse.setVelocity(0, 0);
+      this.movementFrame = 0;
+      this.animationAccumulator = 0;
+      this.horse.setTexture(`horse-${this.currentFacing}-idle`);
+    }
+
+    this.horseShadow.setPosition(this.horse.x, this.horse.y + 31);
+    const nearExit =
+      Phaser.Math.Distance.Between(
+        this.horse.x,
+        this.horse.y,
+        this.exitPoint.x,
+        this.exitPoint.y,
+      ) < 92;
+    this.exitPrompt.setVisible(nearExit);
+
+    if (
+      nearExit &&
+      Phaser.Input.Keyboard.JustDown(this.keys.exit)
+    ) {
+      this.exitFacility();
+      return;
+    }
+
+    this.saveLocation(
+      "interior",
+      this.facility.id,
+      this.horse.x,
+      this.horse.y,
+      "front-door",
+      false,
+      delta,
+    );
+    this.updateFacility(time, delta);
+  }
+
+  createCollisionTexture() {
+    if (this.textures.exists("interior-collision")) return;
+    const pixel = this.make.graphics({ x: 0, y: 0, add: false });
+    pixel.fillStyle(0xffffff);
+    pixel.fillRect(0, 0, 4, 4);
+    pixel.generateTexture("interior-collision", 4, 4);
+    pixel.destroy();
+  }
+
+  addCollisionRect(x, y, width, height) {
+    return this.wallGroup
+      .create(x, y, "interior-collision")
+      .setDisplaySize(width, height)
+      .setVisible(false)
+      .refreshBody();
+  }
+
+  createBoundaryWalls() {
+    const thickness = 28;
+    this.addCollisionRect(
+      this.interiorWidth / 2,
+      thickness / 2,
+      this.interiorWidth,
+      thickness,
+    );
+    this.addCollisionRect(
+      this.interiorWidth / 2,
+      this.interiorHeight - thickness / 2,
+      this.interiorWidth,
+      thickness,
+    );
+    this.addCollisionRect(
+      thickness / 2,
+      this.interiorHeight / 2,
+      thickness,
+      this.interiorHeight,
+    );
+    this.addCollisionRect(
+      this.interiorWidth - thickness / 2,
+      this.interiorHeight / 2,
+      thickness,
+      this.interiorHeight,
+    );
+  }
+
+  isInteriorPositionSafe(x, y) {
+    if (
+      x < 24 + SPAWN_CLEARANCE ||
+      x > this.interiorWidth - 24 - SPAWN_CLEARANCE ||
+      y < 24 + SPAWN_CLEARANCE ||
+      y > this.interiorHeight - 24 - SPAWN_CLEARANCE
+    ) {
+      return false;
+    }
+
+    for (const wall of this.wallGroup.getChildren()) {
+      const body = wall.body;
+      if (
+        x + SPAWN_CLEARANCE > body.left &&
+        x - SPAWN_CLEARANCE < body.right &&
+        y + SPAWN_CLEARANCE > body.top &&
+        y - SPAWN_CLEARANCE < body.bottom
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  findSafeInteriorSpawn(savedPosition) {
+    const origin = {
+      x: Phaser.Math.Clamp(
+        Number.isFinite(savedPosition?.x)
+          ? savedPosition.x
+          : this.facility.interiorSpawn.x,
+        24 + SPAWN_CLEARANCE,
+        this.interiorWidth - 24 - SPAWN_CLEARANCE,
+      ),
+      y: Phaser.Math.Clamp(
+        Number.isFinite(savedPosition?.y)
+          ? savedPosition.y
+          : this.facility.interiorSpawn.y,
+        24 + SPAWN_CLEARANCE,
+        this.interiorHeight - 24 - SPAWN_CLEARANCE,
+      ),
+    };
+    if (this.isInteriorPositionSafe(origin.x, origin.y)) return origin;
+
+    for (let radius = 64; radius <= 768; radius += 64) {
+      for (let offset = -radius; offset <= radius; offset += 64) {
+        const candidates = [
+          { x: origin.x + offset, y: origin.y - radius },
+          { x: origin.x + offset, y: origin.y + radius },
+          { x: origin.x - radius, y: origin.y + offset },
+          { x: origin.x + radius, y: origin.y + offset },
+        ];
+        for (const candidate of candidates) {
+          if (this.isInteriorPositionSafe(candidate.x, candidate.y)) {
+            return candidate;
+          }
+        }
+      }
+    }
+
+    return { ...this.facility.interiorSpawn };
+  }
+
+  exitFacility() {
+    this.isTransitioning = true;
+    this.horse.setVelocity(0, 0);
+    const returnPosition = this.facility.returnPosition;
+    this.progress.setLocation(
+      "world",
+      "meadow",
+      returnPosition.x,
+      returnPosition.y,
+      this.facility.id,
+    );
+    this.progressStore.save(this.progress);
+    this.cameras.main.fadeOut(220, 20, 36, 22);
+    this.time.delayedCall(230, () => {
+      const meadow = this.scene.get("meadow");
+      if (meadow.sys.isSleeping()) {
+        meadow.prepareReturnFromFacility(this.facility);
+        this.scene.wake("meadow");
+        this.scene.sleep();
+      } else {
+        this.scene.start("meadow", {
+          returnFromFacility: this.facility.id,
+        });
+      }
+    });
+  }
+
+  getFacingDirection(horizontal, vertical) {
+    if (vertical < 0) {
+      if (horizontal < 0) return "nw";
+      if (horizontal > 0) return "ne";
+      return "n";
+    }
+    if (vertical > 0) {
+      if (horizontal < 0) return "sw";
+      if (horizontal > 0) return "se";
+      return "s";
+    }
+    return horizontal < 0 ? "w" : "e";
+  }
+
+  setHorseCollider(facing) {
+    if (facing === "e" || facing === "w") {
+      this.horse.body.setSize(84, 38);
+      this.horse.body.setOffset(22, 45);
+    } else if (facing.length === 2) {
+      this.horse.body.setSize(66, 66);
+      this.horse.body.setOffset(31, 31);
+    } else {
+      this.horse.body.setSize(38, 84);
+      this.horse.body.setOffset(45, 22);
+    }
+  }
+
+  buildInterior() {}
+
+  onFacilityEntered() {}
+
+  updateFacility() {}
+}
+
+class StableInteriorScene extends BaseInteriorScene {
+  constructor() {
+    super("stable-interior", "stable-main");
+  }
+
+  buildInterior() {
+    this.exitPoint = { x: 480, y: 590 };
+    const room = this.add.graphics().setDepth(0);
+    room.fillStyle(0x50351f);
+    room.fillRect(0, 0, this.interiorWidth, this.interiorHeight);
+    room.fillStyle(0x73502b);
+    room.fillRect(28, 28, this.interiorWidth - 56, this.interiorHeight - 56);
+    room.lineStyle(3, 0x5f4024, 1);
+    for (let y = 42; y < this.interiorHeight - 28; y += 28) {
+      room.lineBetween(28, y, this.interiorWidth - 28, y);
+    }
+
+    room.fillStyle(0x342419);
+    for (const x of [170, 790]) {
+      room.fillRect(x - 110, 80, 220, 300);
+      room.fillStyle(0x9b6931);
+      room.fillRect(x - 96, 94, 192, 272);
+      room.fillStyle(0x342419);
+      for (let y = 126; y < 360; y += 70) {
+        room.fillRect(x - 96, y, 192, 10);
+      }
+      this.addCollisionRect(x, 230, 220, 300);
+    }
+
+    room.fillStyle(0xd5ac54);
+    room.fillRect(398, 102, 164, 74);
+    room.fillStyle(0xf0cd73);
+    room.fillRect(412, 114, 136, 50);
+    this.addCollisionRect(480, 139, 164, 74);
+
+    room.fillStyle(0x2d2017);
+    room.fillRect(420, 600, 120, 40);
+  }
+}
+
+class HospitalInteriorScene extends BaseInteriorScene {
+  constructor() {
+    super("hospital-interior", "horse-hospital");
+    this.serviceMessage = null;
+  }
+
+  buildInterior() {
+    this.exitPoint = { x: 480, y: 590 };
+    const room = this.add.graphics().setDepth(0);
+    room.fillStyle(0x9ba7a0);
+    room.fillRect(0, 0, this.interiorWidth, this.interiorHeight);
+    const tileSize = 32;
+    for (let y = 28; y < this.interiorHeight - 28; y += tileSize) {
+      for (let x = 28; x < this.interiorWidth - 28; x += tileSize) {
+        room.fillStyle(
+          ((x + y) / tileSize) % 2 === 0 ? 0xe7e5d5 : 0xc9d7d0,
+        );
+        room.fillRect(x, y, tileSize, tileSize);
+      }
+    }
+
+    const beds = [
+      [170, 160],
+      [170, 340],
+      [790, 160],
+      [790, 340],
+    ];
+    for (const [x, y] of beds) {
+      room.fillStyle(0x3f5963);
+      room.fillRect(x - 76, y - 42, 152, 84);
+      room.fillStyle(0xf2eed8);
+      room.fillRect(x - 66, y - 32, 132, 64);
+      room.fillStyle(0x8dc2c8);
+      room.fillRect(x - 58, y - 24, 46, 48);
+      this.addCollisionRect(x, y, 152, 84);
+    }
+
+    room.fillStyle(0xd74747);
+    room.fillRect(456, 84, 48, 116);
+    room.fillRect(422, 118, 116, 48);
+    room.fillStyle(0x324047);
+    room.fillRect(360, 232, 240, 58);
+    this.addCollisionRect(480, 261, 240, 58);
+    room.fillStyle(0x2d3432);
+    room.fillRect(420, 600, 120, 40);
+  }
+
+  onFacilityEntered() {
+    const wasHurt = this.progress.lives < MAX_LIVES;
+    this.progress.lives = MAX_LIVES;
+    this.progressStore.save(this.progress);
+    this.serviceMessage?.destroy();
+    this.serviceMessage = this.add
+      .text(
+        this.interiorWidth / 2,
+        330,
+        wasHurt ? "ALL HEARTS RESTORED!" : "YOUR HORSE IS HEALTHY!",
+        {
+          fontFamily: '"Courier New", monospace',
+          fontSize: "15px",
+          fontStyle: "bold",
+          color: "#d9efb0",
+          backgroundColor: "#29433a",
+          padding: { x: 8, y: 5 },
+          resolution: 2,
+        },
+      )
+      .setOrigin(0.5)
+      .setDepth(50);
+  }
+}
+
+class TrackInteriorScene extends BaseInteriorScene {
+  constructor() {
+    super("track-interior", "trotting-track", 1400, 900);
+    this.checkpoints = [];
+    this.nextCheckpoint = 0;
+    this.lapStartedAt = null;
+    this.trackStatus = null;
+  }
+
+  buildInterior() {
+    this.exitPoint = { x: 700, y: 850 };
+    const track = this.add.graphics().setDepth(0);
+    track.fillStyle(0x4f8b3d);
+    track.fillRect(0, 0, this.interiorWidth, this.interiorHeight);
+    track.lineStyle(190, 0x8d5d35, 1);
+    track.strokeEllipse(700, 430, 1080, 610);
+    track.lineStyle(150, 0xb67b48, 1);
+    track.strokeEllipse(700, 430, 1080, 610);
+    track.lineStyle(6, 0xe8d9a4, 1);
+    track.strokeEllipse(700, 430, 995, 525);
+    track.fillStyle(0xf2eed8);
+    for (let x = 650; x <= 750; x += 20) {
+      track.fillRect(x, 735, 10, 56);
+    }
+    track.fillStyle(0x3a2417);
+    track.fillRect(620, 860, 160, 40);
+
+    this.checkpoints = [
+      { x: 1190, y: 430 },
+      { x: 700, y: 150 },
+      { x: 210, y: 430 },
+      { x: 700, y: 760 },
+    ];
+    this.trackStatus = this.add
+      .text(18, 56, "PASS THE FOUR TRACK MARKERS", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "12px",
+        color: "#fff4bd",
+        backgroundColor: "#142416",
+        padding: { x: 7, y: 4 },
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(100);
+  }
+
+  onFacilityEntered() {
+    this.nextCheckpoint = 0;
+    this.lapStartedAt = null;
+    this.trackStatus?.setText("PASS THE FOUR TRACK MARKERS");
+  }
+
+  updateFacility(time) {
+    const checkpoint = this.checkpoints[this.nextCheckpoint];
+    if (
+      Phaser.Math.Distance.Between(
+        this.horse.x,
+        this.horse.y,
+        checkpoint.x,
+        checkpoint.y,
+      ) >= 86
+    ) {
+      return;
+    }
+
+    if (this.nextCheckpoint === 0) {
+      this.lapStartedAt = time;
+    }
+    this.nextCheckpoint += 1;
+
+    if (this.nextCheckpoint < this.checkpoints.length) {
+      this.trackStatus.setText(
+        `CHECKPOINT ${this.nextCheckpoint}/4`,
+      );
+      return;
+    }
+
+    const lapTime = Math.max(0, time - this.lapStartedAt);
+    const previousBest = Number(
+      this.progress.records.trackBestMs,
+    );
+    if (!Number.isFinite(previousBest) || lapTime < previousBest) {
+      this.progress.records.trackBestMs = Math.round(lapTime);
+      this.progressStore.save(this.progress);
+      this.trackStatus.setText(
+        `NEW BEST: ${(lapTime / 1000).toFixed(2)}s`,
+      );
+    } else {
+      this.trackStatus.setText(
+        `LAP: ${(lapTime / 1000).toFixed(2)}s  BEST: ${(previousBest / 1000).toFixed(2)}s`,
+      );
+    }
+    this.nextCheckpoint = 0;
+    this.lapStartedAt = null;
+  }
+}
+
 const config = {
   type: Phaser.AUTO,
   parent: "game",
@@ -815,7 +2174,13 @@ const config = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: MeadowScene,
+  scene: [
+    BootScene,
+    MeadowScene,
+    StableInteriorScene,
+    HospitalInteriorScene,
+    TrackInteriorScene,
+  ],
 };
 
 new Phaser.Game(config);
