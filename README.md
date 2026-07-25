@@ -35,6 +35,11 @@ at a canter costs two, and at a gallop costs all three. Losing every heart
 returns the horse to the starting position with three restored hearts.
 Obstacle collision and damage are disabled while the horse is airborne.
 
+The bottom-right local map keeps the horse centered, plots nearby puddles and
+fences, and uses distinct pixel icons for the stable, hospital, and trotting
+track. Facility markers remain on the map edge when their destination is farther
+away.
+
 ## Facilities
 
 Three authored structures are placed in the meadow:

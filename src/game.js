@@ -9,6 +9,8 @@ const PROGRESS_STORAGE_KEY = "horsin-around-progress";
 const AUTOSAVE_INTERVAL_MS = 5000;
 const SPAWN_CLEARANCE = 48;
 const CHUNK_SIZE = 1024;
+const MINIMAP_REFRESH_MS = 100;
+const MINIMAP_WORLD_HALF_WIDTH = 1600;
 const HIT_COOLDOWN_MS = 900;
 const JUMP_DURATION_MS = 850;
 const JUMP_COOLDOWN_MS = 1050;
@@ -553,6 +555,9 @@ class MeadowScene extends ProgressScene {
     this.gaitText = null;
     this.gallopText = null;
     this.gallopBar = null;
+    this.minimapGraphics = null;
+    this.minimapBounds = null;
+    this.minimapElapsed = 0;
   }
 
   create() {
@@ -757,6 +762,7 @@ class MeadowScene extends ProgressScene {
 
   updateWorldSystems(delta) {
     this.chunkManager?.update(this.horse.x, this.horse.y);
+    this.updateMinimap(delta);
     this.saveLocation(
       "world",
       "meadow",
@@ -852,6 +858,7 @@ class MeadowScene extends ProgressScene {
     this.chunkManager.update(returnPosition.x, returnPosition.y);
     this.updateHearts();
     this.updateGaitHud();
+    this.updateMinimap(0, true);
     this.cameras.main.fadeIn(180, 20, 36, 22);
   }
 
@@ -1516,8 +1523,151 @@ class MeadowScene extends ProgressScene {
       .setScrollFactor(0)
       .setDepth(101);
 
+    this.createMinimap(hudOffsetX, hudOffsetY);
     this.updateHearts();
     this.updateGaitHud();
+    this.updateMinimap(0, true);
+  }
+
+  createMinimap(hudOffsetX, hudOffsetY) {
+    const panelWidth = 180;
+    const panelHeight = 140;
+    const panelX = 960 - hudOffsetX - panelWidth;
+    const panelY = 540 - hudOffsetY - panelHeight;
+    const mapX = panelX + 8;
+    const mapY = panelY + 8;
+    const mapWidth = panelWidth - 16;
+    const mapHeight = panelHeight - 16;
+
+    this.minimapBounds = {
+      x: mapX,
+      y: mapY,
+      width: mapWidth,
+      height: mapHeight,
+      centerX: mapX + mapWidth / 2,
+      centerY: mapY + mapHeight / 2,
+    };
+
+    this.add
+      .rectangle(
+        panelX,
+        panelY,
+        panelWidth,
+        panelHeight,
+        0x142416,
+        0.9,
+      )
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setStrokeStyle(3, 0xb7d878);
+
+    this.add
+      .rectangle(mapX, mapY, mapWidth, mapHeight, 0x315d32, 1)
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setStrokeStyle(1, 0x7aa85c);
+
+    const grid = this.add
+      .graphics()
+      .setScrollFactor(0)
+      .setDepth(101);
+    grid.lineStyle(1, 0x6f9854, 0.22);
+    grid.lineBetween(
+      this.minimapBounds.centerX,
+      mapY + 1,
+      this.minimapBounds.centerX,
+      mapY + mapHeight - 1,
+    );
+    grid.lineBetween(
+      mapX + 1,
+      this.minimapBounds.centerY,
+      mapX + mapWidth - 1,
+      this.minimapBounds.centerY,
+    );
+
+    this.minimapGraphics = this.add
+      .graphics()
+      .setScrollFactor(0)
+      .setDepth(102);
+  }
+
+  updateMinimap(delta = 0, force = false) {
+    if (!this.minimapGraphics || !this.minimapBounds || !this.horse) {
+      return;
+    }
+
+    this.minimapElapsed += delta;
+    if (!force && this.minimapElapsed < MINIMAP_REFRESH_MS) return;
+    this.minimapElapsed = 0;
+
+    const bounds = this.minimapBounds;
+    const halfHeight =
+      MINIMAP_WORLD_HALF_WIDTH * (bounds.height / bounds.width);
+    const scaleX = bounds.width / (MINIMAP_WORLD_HALF_WIDTH * 2);
+    const scaleY = bounds.height / (halfHeight * 2);
+    const graphics = this.minimapGraphics;
+    graphics.clear();
+
+    for (const obstacle of this.obstacles.getChildren()) {
+      const offsetX = obstacle.x - this.horse.x;
+      const offsetY = obstacle.y - this.horse.y;
+      if (
+        Math.abs(offsetX) > MINIMAP_WORLD_HALF_WIDTH ||
+        Math.abs(offsetY) > halfHeight
+      ) {
+        continue;
+      }
+
+      const markerX = bounds.centerX + offsetX * scaleX;
+      const markerY = bounds.centerY + offsetY * scaleY;
+      const isPuddle = obstacle.texture.key === "puddle";
+      graphics.fillStyle(isPuddle ? 0x64b5cf : 0xc98742, 0.9);
+      if (isPuddle) {
+        graphics.fillRect(markerX - 2, markerY - 1, 4, 2);
+      } else {
+        graphics.fillRect(markerX - 1.5, markerY - 1.5, 3, 3);
+      }
+    }
+
+    const markerPadding = 8;
+    for (const facility of FACILITIES) {
+      const offsetX = facility.entrance.x - this.horse.x;
+      const offsetY = facility.entrance.y - this.horse.y;
+      const unclampedX = bounds.centerX + offsetX * scaleX;
+      const unclampedY = bounds.centerY + offsetY * scaleY;
+      const markerX = Phaser.Math.Clamp(
+        unclampedX,
+        bounds.x + markerPadding,
+        bounds.x + bounds.width - markerPadding,
+      );
+      const markerY = Phaser.Math.Clamp(
+        unclampedY,
+        bounds.y + markerPadding,
+        bounds.y + bounds.height - markerPadding,
+      );
+
+      if (facility.type === "stable") {
+        graphics.fillStyle(0xffd06a, 1);
+        graphics.fillRect(markerX - 4, markerY - 4, 8, 8);
+        graphics.fillStyle(0x60401f, 1);
+        graphics.fillRect(markerX - 1, markerY - 1, 3, 3);
+      } else if (facility.type === "hospital") {
+        graphics.fillStyle(0xff8291, 1);
+        graphics.fillRect(markerX - 4, markerY - 1.5, 8, 3);
+        graphics.fillRect(markerX - 1.5, markerY - 4, 3, 8);
+      } else {
+        graphics.lineStyle(2, 0x79d8ff, 1);
+        graphics.strokeCircle(markerX, markerY, 4);
+      }
+    }
+
+    graphics.fillStyle(0xffffff, 1);
+    graphics.fillRect(bounds.centerX - 3, bounds.centerY - 1, 7, 3);
+    graphics.fillRect(bounds.centerX - 1, bounds.centerY - 3, 3, 7);
+    graphics.fillStyle(0x3b1f21, 1);
+    graphics.fillRect(bounds.centerX, bounds.centerY, 1, 1);
   }
 
   updateHearts() {
