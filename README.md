@@ -20,6 +20,7 @@ horizontal and vertical movement.
 - Move without a modifier to trot.
 - Hold **Shift** to canter.
 - Keep moving with **Shift** held for 4.5 seconds to enter a full gallop.
+- Press **Space** to jump over puddles and fences.
 
 Each direction has one standing image and a four-frame leg cycle (forward,
 down, backward, recovery). The cycle runs faster for each faster gait. The
@@ -30,6 +31,7 @@ The horse has three hearts and the meadow contains solid fences and puddles.
 V-walking into an obstacle is safe; hitting one at a trot costs one heart,
 at a canter costs two, and at a gallop costs all three. Losing every heart
 returns the horse to the starting position with three restored hearts.
+Obstacle collision and damage are disabled while the horse is airborne.
 
 ## Project layout
 
