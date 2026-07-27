@@ -13,6 +13,10 @@ From PowerShell:
 
 Then open <http://localhost:8080>.
 
+`server.ps1` is a locked-down local development server bound to loopback. Use
+the generated static release with a production web server or CDN when
+publishing the game; do not expose the PowerShell server to the internet.
+
 Use **WASD** to move. Diagonal movement is normalized to the same speed as
 horizontal and vertical movement.
 
@@ -22,6 +26,9 @@ horizontal and vertical movement.
 - Keep moving with **Shift** held for 4.5 seconds to enter a full gallop.
 - Press **Space** to jump over puddles and fences.
 - Press **E** at a marked doorway to enter or leave a facility.
+
+The same walk, trot, canter, and charged-gallop speeds apply inside facilities,
+including the Circus Maximus.
 
 Each direction has one standing image and a four-frame leg cycle (forward,
 down, backward, recovery). The cycle runs faster for each faster gait. The
@@ -59,7 +66,10 @@ to the existing world and its already-loaded chunks instead of rebuilding it.
 Browser progress uses a versioned serializable model containing lives, current
 location, facility position, save revision, and track records. The older
 position-only save format is migrated automatically. Progress is saved every
-five seconds, during transitions, and when the page closes.
+five seconds, during transitions, and when the page closes. A short-lived
+browser-tab lease prevents two open copies of the game from overwriting one
+another; the active tab keeps the lease and best-time records are merged when
+ownership changes.
 
 Loaded meadow and interior positions are checked against boundaries and solid
 colliders. Unsafe positions search outward on a 64-pixel grid before falling
@@ -71,6 +81,30 @@ meadow can gain more landmarks without generating every decoration at boot.
 New chunks are queued by distance and limited to one per frame to avoid a
 noticeable frame-time spike when the horse crosses a chunk boundary.
 
+## Development checks and releases
+
+Run the portable asset and server checks with:
+
+```powershell
+./scripts/test-project.ps1
+```
+
+Rebuild the 40 horse animation frames from the checked-in source sheets with:
+
+```powershell
+./scripts/build-animation-assets.ps1 -Force
+```
+
+Create a lean static release in `dist/` with:
+
+```powershell
+./scripts/build-release.ps1
+```
+
+The release contains only the game code, Phaser, and the 40 runtime horse
+frames. Source artwork and animation working files remain in the repository but
+are excluded from deployment.
+
 ## Project layout
 
 - `src/game.js` — Phaser scene, controls, camera, and meadow
@@ -78,4 +112,6 @@ noticeable frame-time spike when the horse crosses a chunk boundary.
 - `public/assets/horse/animation/` — five PNG frames for each of eight directions
 - `public/assets/horse/animation-preview.png` — all idle and movement frames
 - `scripts/build-animation-assets.ps1` — reproducible sprite-sheet converter
+- `scripts/test-project.ps1` — server and runtime-asset validation
+- `scripts/build-release.ps1` — lean static deployment packager
 - `vendor/phaser.min.js` — locally pinned Phaser runtime

@@ -6,6 +6,8 @@ const MAX_LIVES = 3;
 const WORLD_VERSION = 2;
 const PROGRESS_SCHEMA_VERSION = 2;
 const PROGRESS_STORAGE_KEY = "horsin-around-progress";
+const PROGRESS_LEASE_KEY = `${PROGRESS_STORAGE_KEY}:lease`;
+const PROGRESS_LEASE_MS = 12000;
 const AUTOSAVE_INTERVAL_MS = 5000;
 const SPAWN_CLEARANCE = 48;
 const CHUNK_SIZE = 1024;
@@ -61,6 +63,38 @@ const GAITS = {
     color: "#ff8a5b",
   },
 };
+
+function resolveGaitState({
+  isMoving,
+  walkHeld,
+  runHeld,
+  gallopCharge,
+  delta,
+}) {
+  if (!isMoving) {
+    return { gait: "idle", gallopCharge: 0 };
+  }
+  if (walkHeld) {
+    return { gait: "walk", gallopCharge: 0 };
+  }
+  if (runHeld) {
+    const nextCharge = Math.min(
+      gallopCharge + delta,
+      GALLOP_CHARGE_MS,
+    );
+    return {
+      gait: nextCharge >= GALLOP_CHARGE_MS ? "gallop" : "canter",
+      gallopCharge: nextCharge,
+    };
+  }
+  return { gait: "trot", gallopCharge: 0 };
+}
+
+function resetKeys(keys, names) {
+  for (const name of names) {
+    keys?.[name]?.reset();
+  }
+}
 
 const FACILITIES = [
   {
@@ -235,7 +269,34 @@ class HorseProgress {
   }
 }
 
+function mergeProgressRecords(localRecords = {}, storedRecords = {}) {
+  const merged = { ...storedRecords, ...localRecords };
+  const keys = new Set([
+    ...Object.keys(storedRecords),
+    ...Object.keys(localRecords),
+  ]);
+
+  for (const key of keys) {
+    if (!/best.*ms$/i.test(key)) continue;
+    const candidates = [
+      Number(storedRecords[key]),
+      Number(localRecords[key]),
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    if (candidates.length > 0) {
+      merged[key] = Math.min(...candidates);
+    }
+  }
+  return merged;
+}
+
 class LocalProgressStore {
+  constructor() {
+    this.sessionId =
+      globalThis.crypto?.randomUUID?.() ??
+      `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    this.leaseWarningShown = false;
+  }
+
   load() {
     try {
       const saved = window.localStorage.getItem(PROGRESS_STORAGE_KEY);
@@ -248,8 +309,91 @@ class LocalProgressStore {
     }
   }
 
+  tryAcquireLease() {
+    const now = Date.now();
+    const savedLease = window.localStorage.getItem(PROGRESS_LEASE_KEY);
+    if (savedLease) {
+      try {
+        const lease = JSON.parse(savedLease);
+        if (
+          lease.sessionId !== this.sessionId &&
+          Number(lease.expiresAt) > now
+        ) {
+          if (!this.leaseWarningShown) {
+            console.warn(
+              "Progress saving is paused because another game tab is active.",
+            );
+            this.leaseWarningShown = true;
+          }
+          return false;
+        }
+      } catch {
+        // A malformed lease is safe to replace.
+      }
+    }
+
+    const nextLease = {
+      sessionId: this.sessionId,
+      expiresAt: now + PROGRESS_LEASE_MS,
+    };
+    window.localStorage.setItem(
+      PROGRESS_LEASE_KEY,
+      JSON.stringify(nextLease),
+    );
+    const confirmedValue = window.localStorage.getItem(
+      PROGRESS_LEASE_KEY,
+    );
+    let acquired = false;
+    try {
+      const confirmedLease = JSON.parse(confirmedValue);
+      acquired = confirmedLease.sessionId === this.sessionId;
+    } catch {
+      acquired = false;
+    }
+    if (acquired) {
+      this.leaseWarningShown = false;
+    }
+    return acquired;
+  }
+
+  releaseLease() {
+    try {
+      const savedLease = window.localStorage.getItem(PROGRESS_LEASE_KEY);
+      if (!savedLease) return;
+      const lease = JSON.parse(savedLease);
+      if (lease.sessionId === this.sessionId) {
+        window.localStorage.removeItem(PROGRESS_LEASE_KEY);
+      }
+    } catch {
+      // The lease expires automatically if storage cannot be accessed.
+    }
+  }
+
   save(progress) {
     try {
+      if (!this.tryAcquireLease()) return false;
+
+      const storedValue = window.localStorage.getItem(
+        PROGRESS_STORAGE_KEY,
+      );
+      if (storedValue) {
+        try {
+          const storedProgress = HorseProgress.fromJSON(
+            JSON.parse(storedValue),
+          );
+          progress.revision = Math.max(
+            progress.revision,
+            storedProgress.revision,
+          );
+          progress.records = mergeProgressRecords(
+            progress.records,
+            storedProgress.records,
+          );
+        } catch {
+          console.warn("Replacing invalid saved progress.");
+        }
+      }
+
       progress.markSaved();
       window.localStorage.setItem(
         PROGRESS_STORAGE_KEY,
@@ -301,6 +445,7 @@ class ProgressScene extends Phaser.Scene {
         location.entranceId,
         true,
       );
+      this.progressStore.releaseLease();
     };
     window.addEventListener("pagehide", this.pageHideHandler);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -846,11 +991,26 @@ class MeadowScene extends ProgressScene {
     this.horse.clearTint();
     this.currentFacing = "s";
     this.currentGait = "idle";
+    this.gallopCharge = 0;
+    this.movementFrame = 0;
+    this.animationAccumulator = 0;
+    this.dustTimer = 0;
+    this.knockbackUntil = 0;
     this.isJumping = false;
     this.isTransitioning = false;
     this.nearbyFacility = null;
     this.entrancePrompt.setVisible(false);
-    this.keys.enter.reset();
+    this.setHorseCollider("s");
+    resetKeys(this.keys, [
+      "up",
+      "left",
+      "down",
+      "right",
+      "walk",
+      "run",
+      "jump",
+      "enter",
+    ]);
     this.horseShadow.setPosition(
       returnPosition.x,
       returnPosition.y + 31,
@@ -1053,6 +1213,7 @@ class MeadowScene extends ProgressScene {
     this.horse.setScale(1);
     this.horse.setAngle(0);
     this.horse.clearTint();
+    this.setHorseCollider("n");
     this.horseShadow.setPosition(
       resetPosition.x,
       resetPosition.y + 31,
@@ -1125,22 +1286,15 @@ class MeadowScene extends ProgressScene {
   }
 
   getCurrentGait(delta) {
-    // Walking takes priority if both modifiers are held.
-    if (this.keys.walk.isDown) {
-      this.gallopCharge = 0;
-      return "walk";
-    }
-
-    if (this.keys.run.isDown) {
-      this.gallopCharge = Math.min(
-        this.gallopCharge + delta,
-        GALLOP_CHARGE_MS,
-      );
-      return this.gallopCharge >= GALLOP_CHARGE_MS ? "gallop" : "canter";
-    }
-
-    this.gallopCharge = 0;
-    return "trot";
+    const state = resolveGaitState({
+      isMoving: true,
+      walkHeld: this.keys.walk.isDown,
+      runHeld: this.keys.run.isDown,
+      gallopCharge: this.gallopCharge,
+      delta,
+    });
+    this.gallopCharge = state.gallopCharge;
+    return state.gait;
   }
 
   getFacingDirection(horizontal, vertical) {
@@ -1736,6 +1890,8 @@ class BaseInteriorScene extends ProgressScene {
     this.wallGroup = null;
     this.keys = null;
     this.currentFacing = "n";
+    this.currentGait = "idle";
+    this.gallopCharge = 0;
     this.movementFrame = 0;
     this.animationAccumulator = 0;
     this.exitPoint = { x: width / 2, y: height - 44 };
@@ -1873,11 +2029,22 @@ class BaseInteriorScene extends ProgressScene {
     this.horse.setDisplayOrigin(64, 64);
     this.horse.setScale(1);
     this.currentFacing = "n";
+    this.currentGait = "idle";
+    this.gallopCharge = 0;
     this.movementFrame = 0;
     this.animationAccumulator = 0;
+    this.setHorseCollider("n");
     this.horseShadow.setPosition(spawn.x, spawn.y + 31);
     this.exitPrompt.setVisible(false);
-    this.keys.exit.reset();
+    resetKeys(this.keys, [
+      "up",
+      "left",
+      "down",
+      "right",
+      "walk",
+      "run",
+      "exit",
+    ]);
     this.isTransitioning = false;
     this.onFacilityEntered();
     this.progressStore.save(this.progress);
@@ -1893,19 +2060,27 @@ class BaseInteriorScene extends ProgressScene {
       Number(this.keys.down.isDown) - Number(this.keys.up.isDown);
     const direction = new Phaser.Math.Vector2(horizontal, vertical);
     const isMoving = direction.lengthSq() > 0;
+    const gaitState = resolveGaitState({
+      isMoving,
+      walkHeld: this.keys.walk.isDown,
+      runHeld: this.keys.run.isDown,
+      gallopCharge: this.gallopCharge,
+      delta,
+    });
+    this.currentGait = gaitState.gait;
+    this.gallopCharge = gaitState.gallopCharge;
 
     if (isMoving) {
-      const speed = this.keys.walk.isDown
-        ? GAITS.walk.speed
-        : this.keys.run.isDown
-          ? GAITS.canter.speed
-          : 190;
+      const gait = GAITS[this.currentGait];
       direction.normalize();
-      this.horse.setVelocity(direction.x * speed, direction.y * speed);
+      this.horse.setVelocity(
+        direction.x * gait.speed,
+        direction.y * gait.speed,
+      );
       this.currentFacing = this.getFacingDirection(horizontal, vertical);
       this.setHorseCollider(this.currentFacing);
       this.animationAccumulator += delta;
-      const frameDuration = 1000 / (this.keys.run.isDown ? 8 : 6);
+      const frameDuration = 1000 / gait.animationFps;
       while (this.animationAccumulator >= frameDuration) {
         this.animationAccumulator -= frameDuration;
         this.movementFrame = (this.movementFrame + 1) % 4;
@@ -2420,7 +2595,66 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.trackStatus?.setText("CROSS THE STARTING LINE");
   }
 
+  isWithinCourseOrGate(x, y) {
+    const centerX = this.interiorWidth / 2;
+    const centerY = 520;
+    const radiusX = 1240;
+    const radiusY = 430;
+    const inExitGate =
+      Math.abs(x - centerX) <= 120 && y >= centerY + 330;
+    if (inExitGate) return true;
+
+    const normalizedX = (x - centerX) / radiusX;
+    const normalizedY = (y - centerY) / radiusY;
+    return normalizedX ** 2 + normalizedY ** 2 <= 1;
+  }
+
+  isInteriorPositionSafe(x, y) {
+    return (
+      super.isInteriorPositionSafe(x, y) &&
+      this.isWithinCourseOrGate(x, y)
+    );
+  }
+
+  constrainHorseToCourse() {
+    if (this.isWithinCourseOrGate(this.horse.x, this.horse.y)) return;
+
+    const centerX = this.interiorWidth / 2;
+    const centerY = 520;
+    const radiusX = 1240;
+    const radiusY = 430;
+    const offsetX = this.horse.x - centerX;
+    const offsetY = this.horse.y - centerY;
+    const normalizedDistance = Math.sqrt(
+      (offsetX / radiusX) ** 2 + (offsetY / radiusY) ** 2,
+    );
+    if (normalizedDistance === 0) return;
+
+    const velocityX = this.horse.body.velocity.x;
+    const velocityY = this.horse.body.velocity.y;
+    const boundaryScale = 0.97 / normalizedDistance;
+    const constrainedX = centerX + offsetX * boundaryScale;
+    const constrainedY = centerY + offsetY * boundaryScale;
+
+    const normal = new Phaser.Math.Vector2(
+      offsetX / (radiusX * radiusX),
+      offsetY / (radiusY * radiusY),
+    ).normalize();
+    const outwardSpeed = Math.max(
+      0,
+      velocityX * normal.x + velocityY * normal.y,
+    );
+
+    this.horse.body.reset(constrainedX, constrainedY);
+    this.horse.setVelocity(
+      velocityX - outwardSpeed * normal.x,
+      velocityY - outwardSpeed * normal.y,
+    );
+    this.horseShadow.setPosition(constrainedX, constrainedY + 31);
+  }
+
   updateFacility(time) {
+    this.constrainHorseToCourse();
     const checkpoint = this.checkpoints[this.nextCheckpoint];
     if (!checkpoint) return;
     if (

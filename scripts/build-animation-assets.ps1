@@ -12,14 +12,14 @@ $sourceRoot = Join-Path $horseRoot "source"
 New-Item -ItemType Directory -Force -Path $outputRoot, $sourceRoot | Out-Null
 
 $sheets = [ordered]@{
-    e  = "C:\Users\corne\.codex\generated_images\019f8ff0-e3ae-7dd1-be7d-93e1927323aa\call_n8lAh6PCi4u6Ds6FCLM4YPLI.png"
-    w  = "C:\Users\corne\.codex\generated_images\019f8ff0-e3ae-7dd1-be7d-93e1927323aa\call_C4FJj3JLee6BBrhsoOiqMNxw.png"
-    n  = "C:\Users\corne\.codex\generated_images\019f8ff0-e3ae-7dd1-be7d-93e1927323aa\call_nk5ILRSarKuN0I0hDBlwUxxa.png"
-    s  = "C:\Users\corne\.codex\generated_images\019f8ff0-e3ae-7dd1-be7d-93e1927323aa\call_m7gXWcDQ7DlGT3sElfqmAtq8.png"
-    ne = "C:\Users\corne\.codex\generated_images\019f8ff0-e3ae-7dd1-be7d-93e1927323aa\call_ordOn5hsfq9yQm2FdgvOlPo1.png"
-    se = "C:\Users\corne\.codex\generated_images\019f8ff0-e3ae-7dd1-be7d-93e1927323aa\call_88mXFOntvAOpVMRRIDHrzB6u.png"
-    sw = "C:\Users\corne\.codex\generated_images\019f8ff0-e3ae-7dd1-be7d-93e1927323aa\call_oJqmYzKxmK57QBd1S7xUB44t.png"
-    nw = "C:\Users\corne\.codex\generated_images\019f8ff0-e3ae-7dd1-be7d-93e1927323aa\call_qN5aNLGki0LiY5GuKMaxZ0pT.png"
+    e  = (Join-Path $sourceRoot "horse-e-cycle-sheet.png")
+    w  = (Join-Path $sourceRoot "horse-w-cycle-sheet.png")
+    n  = (Join-Path $sourceRoot "horse-n-cycle-sheet.png")
+    s  = (Join-Path $sourceRoot "horse-s-cycle-sheet.png")
+    ne = (Join-Path $sourceRoot "horse-ne-cycle-sheet.png")
+    se = (Join-Path $sourceRoot "horse-se-cycle-sheet.png")
+    sw = (Join-Path $sourceRoot "horse-sw-cycle-sheet.png")
+    nw = (Join-Path $sourceRoot "horse-nw-cycle-sheet.png")
 }
 
 $palette = @(
@@ -85,10 +85,6 @@ foreach ($direction in $sheets.Keys) {
     if (-not $Force -and ($expectedFrames | Where-Object { -not (Test-Path $_) }).Count -eq 0) {
         continue
     }
-
-    Copy-Item -LiteralPath $sheetPath `
-        -Destination (Join-Path $sourceRoot "horse-$direction-cycle-sheet.png") `
-        -Force
 
     Copy-Item -LiteralPath (Join-Path $horseRoot "horse-$direction.png") `
         -Destination (Join-Path $outputRoot "horse-$direction-idle.png") `
