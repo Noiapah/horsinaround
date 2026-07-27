@@ -46,7 +46,8 @@ Three authored structures are placed in the meadow:
 
 - **Meadow Stable** — an enterable stall and feed-room interior.
 - **Horse Hospital** — entering restores all three hearts.
-- **Trotting Track** — a four-checkpoint timed lap with a saved personal best.
+- **Circus Maximus** — a long Roman-inspired oval with stone stands, a central
+  spina, a checkpointed racing line, and a saved personal best.
 
 Each facility is a separate Phaser scene. Its graphics and collision layout are
 created on the first visit, then the scene sleeps and is reused on later visits.

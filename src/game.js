@@ -90,14 +90,14 @@ const FACILITIES = [
   {
     id: "trotting-track",
     type: "track",
-    name: "TROTTING TRACK",
+    name: "CIRCUS MAXIMUS",
     sceneKey: "track-interior",
     texture: "track-exterior",
     x: START_X,
     y: START_Y - 680,
     entrance: { x: START_X, y: START_Y - 572 },
     returnPosition: { x: START_X, y: START_Y - 512 },
-    interiorSpawn: { x: 700, y: 760 },
+    interiorSpawn: { x: 1400, y: 1010 },
   },
 ];
 const FACILITY_BY_ID = new Map(
@@ -1256,18 +1256,39 @@ class MeadowScene extends ProgressScene {
       const track = this.make.graphics({ x: 0, y: 0, add: false });
       track.fillStyle(0x25301f, 0.35);
       track.fillRect(10, 164, 300, 18);
-      track.fillStyle(0x3a2417);
-      track.fillRect(24, 68, 18, 104);
-      track.fillRect(278, 68, 18, 104);
-      track.fillRect(38, 66, 244, 18);
-      track.fillStyle(0xa8632e);
-      track.fillRect(30, 60, 18, 104);
-      track.fillRect(272, 60, 18, 104);
-      track.fillRect(42, 58, 236, 18);
-      track.fillStyle(0xf0c875);
-      track.fillRect(74, 18, 172, 48);
-      track.fillStyle(0x53341f);
-      track.fillRect(82, 26, 156, 32);
+      track.fillStyle(0x5b3b2a);
+      track.fillRect(18, 68, 284, 104);
+      track.fillStyle(0xc9a36b);
+      track.fillRect(26, 62, 268, 104);
+      track.fillStyle(0xe0bf82);
+      track.fillTriangle(34, 62, 160, 10, 286, 62);
+      track.fillStyle(0x8e2f2e);
+      track.fillTriangle(58, 58, 160, 22, 262, 58);
+      track.fillStyle(0x6d4930);
+      track.fillRect(20, 60, 280, 12);
+      track.fillRect(20, 156, 280, 14);
+
+      for (const x of [44, 94, 226, 276]) {
+        track.fillStyle(0x795338);
+        track.fillRect(x - 8, 72, 20, 84);
+        track.fillStyle(0xe4c58e);
+        track.fillRect(x - 4, 72, 12, 84);
+        track.fillRect(x - 8, 72, 20, 8);
+        track.fillRect(x - 8, 148, 20, 8);
+      }
+
+      track.fillStyle(0x563326);
+      track.fillCircle(160, 112, 38);
+      track.fillRect(122, 112, 76, 52);
+      track.fillStyle(0x241c19);
+      track.fillCircle(160, 116, 28);
+      track.fillRect(132, 116, 56, 50);
+      track.fillStyle(0xb33a35);
+      track.fillRect(68, 84, 18, 44);
+      track.fillRect(234, 84, 18, 44);
+      track.fillStyle(0xe8c36e);
+      track.fillRect(72, 88, 10, 8);
+      track.fillRect(238, 88, 10, 8);
       track.generateTexture("track-exterior", 320, 192);
       track.destroy();
     }
@@ -2211,7 +2232,7 @@ class HospitalInteriorScene extends BaseInteriorScene {
 
 class TrackInteriorScene extends BaseInteriorScene {
   constructor() {
-    super("track-interior", "trotting-track", 1400, 900);
+    super("track-interior", "trotting-track", 2800, 1100);
     this.checkpoints = [];
     this.nextCheckpoint = 0;
     this.lapStartedAt = null;
@@ -2219,31 +2240,169 @@ class TrackInteriorScene extends BaseInteriorScene {
   }
 
   buildInterior() {
-    this.exitPoint = { x: 700, y: 850 };
+    const centerX = this.interiorWidth / 2;
+    const centerY = 520;
+    this.exitPoint = { x: centerX, y: 1040 };
     const track = this.add.graphics().setDepth(0);
-    track.fillStyle(0x4f8b3d);
+
+    // Deep stone ground behind the arena.
+    track.fillStyle(0x50372a);
     track.fillRect(0, 0, this.interiorWidth, this.interiorHeight);
-    track.lineStyle(190, 0x8d5d35, 1);
-    track.strokeEllipse(700, 430, 1080, 610);
-    track.lineStyle(150, 0xb67b48, 1);
-    track.strokeEllipse(700, 430, 1080, 610);
-    track.lineStyle(6, 0xe8d9a4, 1);
-    track.strokeEllipse(700, 430, 995, 525);
-    track.fillStyle(0xf2eed8);
-    for (let x = 650; x <= 750; x += 20) {
-      track.fillRect(x, 735, 10, 56);
+
+    // Tiered stone stands around the racing sand.
+    track.lineStyle(250, 0x8c6947, 1);
+    track.strokeEllipse(centerX, centerY, 2570, 920);
+    track.lineStyle(205, 0xc29a63, 1);
+    track.strokeEllipse(centerX, centerY, 2570, 920);
+    track.lineStyle(14, 0x6f4933, 1);
+    track.strokeEllipse(centerX, centerY, 2580, 930);
+    track.lineStyle(10, 0xe0bd80, 0.85);
+    track.strokeEllipse(centerX, centerY, 2400, 770);
+
+    // Long oval dirt course with pale stone curbs.
+    track.lineStyle(360, 0x75482c, 1);
+    track.strokeEllipse(centerX, centerY, 2320, 700);
+    track.lineStyle(320, 0xc58a50, 1);
+    track.strokeEllipse(centerX, centerY, 2320, 700);
+    track.lineStyle(5, 0xe8cf9b, 0.9);
+    track.strokeEllipse(centerX, centerY, 2480, 860);
+    track.strokeEllipse(centerX, centerY, 2000, 380);
+    track.lineStyle(3, 0x98623c, 0.7);
+    track.strokeEllipse(centerX, centerY, 2210, 600);
+
+    // Packed-earth infield and the central Circus Maximus spina.
+    track.fillStyle(0x65553a);
+    track.fillEllipse(centerX, centerY, 1920, 340);
+    track.lineStyle(7, 0xdfc38a, 1);
+    track.strokeEllipse(centerX, centerY, 1920, 340);
+    track.fillStyle(0x6d3b2d);
+    track.fillRect(centerX - 760, centerY - 76, 1520, 152);
+    track.fillStyle(0xd2ad6f);
+    track.fillRect(centerX - 742, centerY - 62, 1484, 124);
+    track.fillStyle(0x9b3330);
+    track.fillRect(centerX - 724, centerY - 43, 1448, 86);
+    track.fillStyle(0xe2c27e);
+    track.fillRect(centerX - 700, centerY - 29, 1400, 58);
+
+    // Turning posts at both ends of the spina.
+    for (const x of [centerX - 790, centerX + 790]) {
+      track.fillStyle(0x5d3828);
+      track.fillCircle(x + 6, centerY + 8, 38);
+      track.fillStyle(0xe4c58e);
+      track.fillCircle(x, centerY, 34);
+      track.fillStyle(0x9c3430);
+      track.fillCircle(x, centerY, 20);
+      track.fillStyle(0xf0d28e);
+      track.fillRect(x - 5, centerY - 30, 10, 60);
+      track.fillRect(x - 24, centerY - 5, 48, 10);
     }
-    track.fillStyle(0x3a2417);
-    track.fillRect(620, 860, 160, 40);
+
+    // Obelisk, monuments, and the seven lap counters.
+    track.fillStyle(0x4b3026, 0.55);
+    track.fillRect(centerX + 8, centerY - 58, 34, 118);
+    track.fillStyle(0xefe0b1);
+    track.fillRect(centerX - 16, centerY - 58, 32, 116);
+    track.fillStyle(0x9e6b43);
+    track.fillTriangle(
+      centerX - 16,
+      centerY - 58,
+      centerX,
+      centerY - 82,
+      centerX + 16,
+      centerY - 58,
+    );
+    track.fillStyle(0x6f2c2b);
+    track.fillRect(centerX - 26, centerY + 44, 52, 20);
+    for (let i = 0; i < 7; i += 1) {
+      const counterX = centerX - 210 + i * 70;
+      track.fillStyle(0x5b3826);
+      track.fillRect(counterX - 8, centerY - 17, 20, 26);
+      track.fillStyle(i % 2 === 0 ? 0xf0cf71 : 0xd7b45f);
+      track.fillCircle(counterX, centerY - 14, 9);
+    }
+
+    // Marble crowd pixels and crimson imperial banners.
+    const crowdColors = [0x463126, 0x704737, 0x315164, 0xd2b378];
+    for (let x = 220; x <= 2580; x += 28) {
+      const color = crowdColors[Math.floor(x / 28) % crowdColors.length];
+      track.fillStyle(color, 0.95);
+      track.fillRect(x, 72 + (x % 3) * 7, 6, 6);
+      track.fillRect(x + 10, 968 - (x % 4) * 6, 5, 5);
+    }
+    for (let x = 360; x <= 2440; x += 260) {
+      track.fillStyle(0x8f2f2e);
+      track.fillRect(x, 106, 86, 22);
+      track.fillRect(x, 914, 86, 22);
+      track.fillStyle(0xe6bd66);
+      track.fillRect(x + 8, 112, 70, 5);
+      track.fillRect(x + 8, 920, 70, 5);
+    }
+
+    // Direction chevrons: clockwise from the start along the lower straight.
+    track.fillStyle(0x8d3b2d, 0.72);
+    for (let x = 890; x <= 2200; x += 210) {
+      track.fillTriangle(x + 16, 870, x - 12, 856, x - 12, 884);
+      track.fillTriangle(
+        this.interiorWidth - x - 16,
+        170,
+        this.interiorWidth - x + 12,
+        156,
+        this.interiorWidth - x + 12,
+        184,
+      );
+    }
+
+    // Checkered start and finish line across the lower racing lane.
+    track.fillStyle(0xf2eed8);
+    for (let y = 742; y <= 1000; y += 16) {
+      const alternate = Math.floor((y - 742) / 16) % 2;
+      track.fillStyle(alternate === 0 ? 0xf2eed8 : 0x51352a);
+      track.fillRect(centerX - 12, y, 12, 16);
+      track.fillStyle(alternate === 0 ? 0x51352a : 0xf2eed8);
+      track.fillRect(centerX, y, 12, 16);
+    }
 
     this.checkpoints = [
-      { x: 1190, y: 430 },
-      { x: 700, y: 150 },
-      { x: 210, y: 430 },
-      { x: 700, y: 760 },
+      { x: centerX, y: 880 },
+      { x: 2050, y: 820 },
+      { x: 2460, y: 670 },
+      { x: 2520, y: 520 },
+      { x: 2460, y: 370 },
+      { x: 2050, y: 220 },
+      { x: centerX, y: 170 },
+      { x: 750, y: 220 },
+      { x: 340, y: 370 },
+      { x: 280, y: 520 },
+      { x: 340, y: 670 },
+      { x: 750, y: 820 },
+      { x: centerX, y: 880 },
     ];
+
+    // Small painted stones make the checkpoint route readable.
+    for (let i = 1; i < this.checkpoints.length - 1; i += 1) {
+      const checkpoint = this.checkpoints[i];
+      track.fillStyle(i % 2 === 0 ? 0xe8c46d : 0xa33832, 0.9);
+      track.fillRect(checkpoint.x - 5, checkpoint.y - 5, 10, 10);
+      track.fillStyle(0xf5e2ae, 0.9);
+      track.fillRect(checkpoint.x - 2, checkpoint.y - 2, 4, 4);
+    }
+
+    // The infield is solid, forcing racers around the spina.
+    this.addCollisionRect(centerX, centerY, 1780, 330);
+
+    this.add
+      .text(centerX, centerY + 1, "SPQR", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "18px",
+        fontStyle: "bold",
+        color: "#6e2828",
+        resolution: 2,
+      })
+      .setOrigin(0.5)
+      .setDepth(2);
+
     this.trackStatus = this.add
-      .text(18, 56, "PASS THE FOUR TRACK MARKERS", {
+      .text(18, 56, "CROSS THE STARTING LINE", {
         fontFamily: '"Courier New", monospace',
         fontSize: "12px",
         color: "#fff4bd",
@@ -2258,18 +2417,19 @@ class TrackInteriorScene extends BaseInteriorScene {
   onFacilityEntered() {
     this.nextCheckpoint = 0;
     this.lapStartedAt = null;
-    this.trackStatus?.setText("PASS THE FOUR TRACK MARKERS");
+    this.trackStatus?.setText("CROSS THE STARTING LINE");
   }
 
   updateFacility(time) {
     const checkpoint = this.checkpoints[this.nextCheckpoint];
+    if (!checkpoint) return;
     if (
       Phaser.Math.Distance.Between(
         this.horse.x,
         this.horse.y,
         checkpoint.x,
         checkpoint.y,
-      ) >= 86
+      ) >= 105
     ) {
       return;
     }
@@ -2279,19 +2439,24 @@ class TrackInteriorScene extends BaseInteriorScene {
     }
     this.nextCheckpoint += 1;
 
-    if (this.nextCheckpoint < this.checkpoints.length) {
+    const finishIndex = this.checkpoints.length - 1;
+    if (this.nextCheckpoint < finishIndex) {
       this.trackStatus.setText(
-        `CHECKPOINT ${this.nextCheckpoint}/4`,
+        `NEXT MARKER ${this.nextCheckpoint}/${finishIndex - 1}`,
       );
+      return;
+    }
+    if (this.nextCheckpoint === finishIndex) {
+      this.trackStatus.setText("RETURN TO THE FINISH");
       return;
     }
 
     const lapTime = Math.max(0, time - this.lapStartedAt);
     const previousBest = Number(
-      this.progress.records.trackBestMs,
+      this.progress.records.circusTrackBestMs,
     );
     if (!Number.isFinite(previousBest) || lapTime < previousBest) {
-      this.progress.records.trackBestMs = Math.round(lapTime);
+      this.progress.records.circusTrackBestMs = Math.round(lapTime);
       this.progressStore.save(this.progress);
       this.trackStatus.setText(
         `NEW BEST: ${(lapTime / 1000).toFixed(2)}s`,
@@ -2301,8 +2466,9 @@ class TrackInteriorScene extends BaseInteriorScene {
         `LAP: ${(lapTime / 1000).toFixed(2)}s  BEST: ${(previousBest / 1000).toFixed(2)}s`,
       );
     }
-    this.nextCheckpoint = 0;
-    this.lapStartedAt = null;
+    // Crossing the finish also starts the next lap for continuous racing.
+    this.nextCheckpoint = 1;
+    this.lapStartedAt = time;
   }
 }
 
