@@ -19,6 +19,12 @@ const JUMP_COOLDOWN_MS = 1050;
 const JUMP_HEIGHT = 48;
 const HORSE_DIRECTIONS = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
 const GALLOP_CHARGE_MS = 4500;
+const TRACK_LOGICAL_WIDTH = 2800;
+const TRACK_LOGICAL_HEIGHT = 1100;
+const TRACK_SCALE_X = 2;
+const TRACK_SCALE_Y = 1.5;
+const TRACK_WIDTH = TRACK_LOGICAL_WIDTH * TRACK_SCALE_X;
+const TRACK_HEIGHT = TRACK_LOGICAL_HEIGHT * TRACK_SCALE_Y;
 const GAIT_DAMAGE = {
   idle: 0,
   walk: 0,
@@ -59,7 +65,7 @@ const GAITS = {
     label: "GALLOP!",
     speed: 470,
     animationFps: 10,
-    dustInterval: 80,
+    dustInterval: 55,
     color: "#ff8a5b",
   },
 };
@@ -94,6 +100,73 @@ function resetKeys(keys, names) {
   for (const name of names) {
     keys?.[name]?.reset();
   }
+}
+
+function emitHoofDust(scene, direction, gait, delta, depth) {
+  if (!gait.dustInterval) return 0;
+
+  const elapsed = scene.dustTimer + delta;
+  if (elapsed < gait.dustInterval) return elapsed;
+
+  const isGallop = scene.currentGait === "gallop";
+  const particleCount = isGallop ? 3 : 1;
+  const perpendicularX = -direction.y;
+  const perpendicularY = direction.x;
+  const colors = [0xd6c27b, 0xe6cf8a, 0xc9aa67];
+
+  for (let particle = 0; particle < particleCount; particle += 1) {
+    const sideOffset = Phaser.Math.Between(
+      isGallop ? -15 : -7,
+      isGallop ? 15 : 7,
+    );
+    const trailDistance = Phaser.Math.Between(
+      isGallop ? 38 : 34,
+      isGallop ? 54 : 44,
+    );
+    const behindX =
+      scene.horse.x -
+      direction.x * trailDistance +
+      perpendicularX * sideOffset;
+    const behindY =
+      scene.horse.y -
+      direction.y * trailDistance +
+      perpendicularY * sideOffset +
+      Phaser.Math.Between(22, 32);
+    const size = isGallop
+      ? Phaser.Math.Between(7, 11)
+      : Phaser.Math.Between(4, 6);
+    const dust = scene.add
+      .rectangle(
+        behindX,
+        behindY,
+        size,
+        size,
+        Phaser.Math.RND.pick(colors),
+        isGallop ? 0.78 : 0.55,
+      )
+      .setDepth(depth);
+
+    scene.tweens.add({
+      targets: dust,
+      x:
+        behindX -
+        direction.x * Phaser.Math.Between(20, 34) +
+        perpendicularX * Phaser.Math.Between(-10, 10),
+      y:
+        behindY -
+        direction.y * Phaser.Math.Between(20, 34) -
+        Phaser.Math.Between(6, 14),
+      alpha: 0,
+      scale: isGallop ? Phaser.Math.FloatBetween(2.4, 3.1) : 1.8,
+      duration: isGallop
+        ? Phaser.Math.Between(420, 560)
+        : Phaser.Math.Between(360, 440),
+      ease: "Quad.easeOut",
+      onComplete: () => dust.destroy(),
+    });
+  }
+
+  return elapsed % gait.dustInterval;
 }
 
 const FACILITIES = [
@@ -131,7 +204,10 @@ const FACILITIES = [
     y: START_Y - 680,
     entrance: { x: START_X, y: START_Y - 572 },
     returnPosition: { x: START_X, y: START_Y - 512 },
-    interiorSpawn: { x: 1400, y: 1010 },
+    interiorSpawn: {
+      x: 1400 * TRACK_SCALE_X,
+      y: 1010 * TRACK_SCALE_Y,
+    },
   },
 ];
 const FACILITY_BY_ID = new Map(
@@ -1252,34 +1328,7 @@ class MeadowScene extends ProgressScene {
       return;
     }
 
-    if (!gait.dustInterval) {
-      this.dustTimer = 0;
-      return;
-    }
-
-    this.dustTimer += delta;
-    if (this.dustTimer < gait.dustInterval) return;
-    this.dustTimer %= gait.dustInterval;
-
-    const behindX =
-      this.horse.x - direction.x * 42 + Phaser.Math.Between(-5, 5);
-    const behindY =
-      this.horse.y - direction.y * 42 + 30 + Phaser.Math.Between(-3, 3);
-    const size = this.currentGait === "gallop" ? 7 : 5;
-    const dust = this.add
-      .rectangle(behindX, behindY, size, size, 0xd6c27b, 0.55)
-      .setDepth(8);
-
-    this.tweens.add({
-      targets: dust,
-      x: behindX - direction.x * 18,
-      y: behindY - direction.y * 18 - 4,
-      alpha: 0,
-      scale: 1.8,
-      duration: this.currentGait === "gallop" ? 320 : 420,
-      ease: "Quad.easeOut",
-      onComplete: () => dust.destroy(),
-    });
+    this.dustTimer = emitHoofDust(this, direction, gait, delta, 8);
   }
 
   getCurrentGait(delta) {
@@ -1891,6 +1940,7 @@ class BaseInteriorScene extends ProgressScene {
     this.gallopCharge = 0;
     this.movementFrame = 0;
     this.animationAccumulator = 0;
+    this.dustTimer = 0;
     this.exitPoint = { x: width / 2, y: height - 44 };
     this.exitPrompt = null;
     this.isTransitioning = false;
@@ -2030,6 +2080,7 @@ class BaseInteriorScene extends ProgressScene {
     this.gallopCharge = 0;
     this.movementFrame = 0;
     this.animationAccumulator = 0;
+    this.dustTimer = 0;
     this.setHorseCollider("n");
     this.horseShadow.setPosition(spawn.x, spawn.y + 31);
     this.exitPrompt.setVisible(false);
@@ -2085,10 +2136,12 @@ class BaseInteriorScene extends ProgressScene {
       this.horse.setTexture(
         `horse-${this.currentFacing}-walk-${this.movementFrame}`,
       );
+      this.emitDust(direction, gait, delta);
     } else {
       this.horse.setVelocity(0, 0);
       this.movementFrame = 0;
       this.animationAccumulator = 0;
+      this.dustTimer = 0;
       this.horse.setTexture(`horse-${this.currentFacing}-idle`);
     }
 
@@ -2284,6 +2337,8 @@ class BaseInteriorScene extends ProgressScene {
 
   onFacilityEntered() {}
 
+  emitDust() {}
+
   updateFacility() {}
 }
 
@@ -2401,22 +2456,31 @@ class HospitalInteriorScene extends BaseInteriorScene {
 
 class TrackInteriorScene extends BaseInteriorScene {
   constructor() {
-    super("track-interior", "trotting-track", 2800, 1100);
+    super("track-interior", "trotting-track", TRACK_WIDTH, TRACK_HEIGHT);
     this.checkpoints = [];
     this.nextCheckpoint = 0;
     this.lapStartedAt = null;
     this.trackStatus = null;
+    this.arenaGaitText = null;
+    this.arenaSpeedText = null;
+    this.arenaChargeText = null;
+    this.arenaSpeedBar = null;
   }
 
   buildInterior() {
-    const centerX = this.interiorWidth / 2;
+    const centerX = TRACK_LOGICAL_WIDTH / 2;
     const centerY = 520;
-    this.exitPoint = { x: centerX, y: 1040 };
-    const track = this.add.graphics().setDepth(0);
+    const worldX = (x) => x * TRACK_SCALE_X;
+    const worldY = (y) => y * TRACK_SCALE_Y;
+    this.exitPoint = { x: worldX(centerX), y: worldY(1040) };
+    const track = this.add
+      .graphics()
+      .setScale(TRACK_SCALE_X, TRACK_SCALE_Y)
+      .setDepth(0);
 
     // Deep stone ground behind the arena.
     track.fillStyle(0x50372a);
-    track.fillRect(0, 0, this.interiorWidth, this.interiorHeight);
+    track.fillRect(0, 0, TRACK_LOGICAL_WIDTH, TRACK_LOGICAL_HEIGHT);
 
     // Tiered stone stands around the racing sand.
     track.lineStyle(250, 0x8c6947, 1);
@@ -2512,11 +2576,11 @@ class TrackInteriorScene extends BaseInteriorScene {
     for (let x = 890; x <= 2200; x += 210) {
       track.fillTriangle(x + 16, 870, x - 12, 856, x - 12, 884);
       track.fillTriangle(
-        this.interiorWidth - x - 16,
+        TRACK_LOGICAL_WIDTH - x - 16,
         170,
-        this.interiorWidth - x + 12,
+        TRACK_LOGICAL_WIDTH - x + 12,
         156,
-        this.interiorWidth - x + 12,
+        TRACK_LOGICAL_WIDTH - x + 12,
         184,
       );
     }
@@ -2531,7 +2595,7 @@ class TrackInteriorScene extends BaseInteriorScene {
       track.fillRect(centerX, y, 12, 16);
     }
 
-    this.checkpoints = [
+    const logicalCheckpoints = [
       { x: centerX, y: 880 },
       { x: 2050, y: 820 },
       { x: 2460, y: 670 },
@@ -2548,21 +2612,30 @@ class TrackInteriorScene extends BaseInteriorScene {
     ];
 
     // Small painted stones make the checkpoint route readable.
-    for (let i = 1; i < this.checkpoints.length - 1; i += 1) {
-      const checkpoint = this.checkpoints[i];
+    for (let i = 1; i < logicalCheckpoints.length - 1; i += 1) {
+      const checkpoint = logicalCheckpoints[i];
       track.fillStyle(i % 2 === 0 ? 0xe8c46d : 0xa33832, 0.9);
       track.fillRect(checkpoint.x - 5, checkpoint.y - 5, 10, 10);
       track.fillStyle(0xf5e2ae, 0.9);
       track.fillRect(checkpoint.x - 2, checkpoint.y - 2, 4, 4);
     }
+    this.checkpoints = logicalCheckpoints.map((checkpoint) => ({
+      x: worldX(checkpoint.x),
+      y: worldY(checkpoint.y),
+    }));
 
     // The infield is solid, forcing racers around the spina.
-    this.addCollisionRect(centerX, centerY, 1780, 330);
+    this.addCollisionRect(
+      worldX(centerX),
+      worldY(centerY),
+      worldX(1780),
+      worldY(330),
+    );
 
     this.add
-      .text(centerX, centerY + 1, "SPQR", {
+      .text(worldX(centerX), worldY(centerY + 1), "SPQR", {
         fontFamily: '"Courier New", monospace',
-        fontSize: "18px",
+        fontSize: "24px",
         fontStyle: "bold",
         color: "#6e2828",
         resolution: 2,
@@ -2581,21 +2654,147 @@ class TrackInteriorScene extends BaseInteriorScene {
       })
       .setScrollFactor(0)
       .setDepth(100);
+
+    this.createArenaSpeedHud();
+  }
+
+  createArenaSpeedHud() {
+    const panelX = 700;
+    const panelY = 18;
+    const panelWidth = 242;
+    const panelHeight = 70;
+
+    this.add
+      .rectangle(
+        panelX,
+        panelY,
+        panelWidth,
+        panelHeight,
+        0x142416,
+        0.9,
+      )
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setStrokeStyle(2, 0xb7d878);
+
+    this.arenaGaitText = this.add
+      .text(panelX + 12, panelY + 9, "STANDING", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "13px",
+        fontStyle: "bold",
+        color: GAITS.idle.color,
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.arenaSpeedText = this.add
+      .text(panelX + panelWidth - 12, panelY + 9, "SPEED 0", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "13px",
+        fontStyle: "bold",
+        color: "#fff4bd",
+        resolution: 2,
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.arenaChargeText = this.add
+      .text(panelX + 12, panelY + 33, "HOLD SHIFT TO CANTER", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "9px",
+        color: "#a9bd9a",
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.add
+      .rectangle(
+        panelX + 12,
+        panelY + 53,
+        panelWidth - 24,
+        7,
+        0x324735,
+        1,
+      )
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.arenaSpeedBar = this.add
+      .rectangle(
+        panelX + 12,
+        panelY + 53,
+        panelWidth - 24,
+        7,
+        0xff8a5b,
+        1,
+      )
+      .setOrigin(0)
+      .setScale(0, 1)
+      .setScrollFactor(0)
+      .setDepth(102);
+
+    this.updateArenaSpeedHud();
+  }
+
+  updateArenaSpeedHud() {
+    if (!this.arenaGaitText) return;
+
+    const gait = GAITS[this.currentGait];
+    const speedProgress = Phaser.Math.Clamp(
+      gait.speed / GAITS.gallop.speed,
+      0,
+      1,
+    );
+    const gallopProgress = Phaser.Math.Clamp(
+      this.gallopCharge / GALLOP_CHARGE_MS,
+      0,
+      1,
+    );
+
+    this.arenaGaitText.setText(gait.label).setColor(gait.color);
+    this.arenaSpeedText.setText(`SPEED ${gait.speed}`);
+    this.arenaSpeedBar.setScale(speedProgress, 1);
+
+    if (this.currentGait === "gallop") {
+      this.arenaChargeText
+        .setText("FULL GALLOP!")
+        .setColor(GAITS.gallop.color);
+    } else if (this.currentGait === "canter") {
+      this.arenaChargeText
+        .setText(`GALLOP CHARGE ${Math.floor(gallopProgress * 100)}%`)
+        .setColor(GAITS.canter.color);
+    } else {
+      this.arenaChargeText
+        .setText("HOLD SHIFT TO CANTER")
+        .setColor("#a9bd9a");
+    }
   }
 
   onFacilityEntered() {
     this.nextCheckpoint = 0;
     this.lapStartedAt = null;
+    this.dustTimer = 0;
     this.trackStatus?.setText("CROSS THE STARTING LINE");
+    this.updateArenaSpeedHud();
+  }
+
+  emitDust(direction, gait, delta) {
+    this.dustTimer = emitHoofDust(this, direction, gait, delta, 18);
   }
 
   isWithinCourseOrGate(x, y) {
     const centerX = this.interiorWidth / 2;
-    const centerY = 520;
-    const radiusX = 1240;
-    const radiusY = 430;
+    const centerY = 520 * TRACK_SCALE_Y;
+    const radiusX = 1240 * TRACK_SCALE_X;
+    const radiusY = 430 * TRACK_SCALE_Y;
     const inExitGate =
-      Math.abs(x - centerX) <= 120 && y >= centerY + 330;
+      Math.abs(x - centerX) <= 120 * TRACK_SCALE_X &&
+      y >= centerY + 330 * TRACK_SCALE_Y;
     if (inExitGate) return true;
 
     const normalizedX = (x - centerX) / radiusX;
@@ -2614,9 +2813,9 @@ class TrackInteriorScene extends BaseInteriorScene {
     if (this.isWithinCourseOrGate(this.horse.x, this.horse.y)) return;
 
     const centerX = this.interiorWidth / 2;
-    const centerY = 520;
-    const radiusX = 1240;
-    const radiusY = 430;
+    const centerY = 520 * TRACK_SCALE_Y;
+    const radiusX = 1240 * TRACK_SCALE_X;
+    const radiusY = 430 * TRACK_SCALE_Y;
     const offsetX = this.horse.x - centerX;
     const offsetY = this.horse.y - centerY;
     const normalizedDistance = Math.sqrt(
@@ -2648,6 +2847,7 @@ class TrackInteriorScene extends BaseInteriorScene {
   }
 
   updateFacility(time) {
+    this.updateArenaSpeedHud();
     this.constrainHorseToCourse();
     const checkpoint = this.checkpoints[this.nextCheckpoint];
     if (!checkpoint) return;
@@ -2657,7 +2857,7 @@ class TrackInteriorScene extends BaseInteriorScene {
         this.horse.y,
         checkpoint.x,
         checkpoint.y,
-      ) >= 105
+      ) >= 105 * TRACK_SCALE_Y
     ) {
       return;
     }
