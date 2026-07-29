@@ -102,6 +102,77 @@ function resetKeys(keys, names) {
   }
 }
 
+const HORSE_CONTROL_BINDINGS = {
+  up: Phaser.Input.Keyboard.KeyCodes.W,
+  left: Phaser.Input.Keyboard.KeyCodes.A,
+  down: Phaser.Input.Keyboard.KeyCodes.S,
+  right: Phaser.Input.Keyboard.KeyCodes.D,
+  walk: Phaser.Input.Keyboard.KeyCodes.V,
+  run: Phaser.Input.Keyboard.KeyCodes.SHIFT,
+  jump: Phaser.Input.Keyboard.KeyCodes.SPACE,
+  interact: Phaser.Input.Keyboard.KeyCodes.E,
+};
+const HORSE_CONTROL_NAMES = Object.keys(HORSE_CONTROL_BINDINGS);
+
+function createHorseControls(scene) {
+  const keys = scene.input.keyboard.addKeys(HORSE_CONTROL_BINDINGS);
+  scene.input.keyboard.addCapture(
+    Object.values(HORSE_CONTROL_BINDINGS),
+  );
+  return keys;
+}
+
+function startHorseJump(scene, time, blockedUntil = 0) {
+  if (
+    scene.isJumping ||
+    time < scene.jumpCooldownUntil ||
+    time < blockedUntil
+  ) {
+    return;
+  }
+
+  scene.isJumping = true;
+  scene.jumpStartedAt = time;
+  scene.jumpCooldownUntil = time + JUMP_COOLDOWN_MS;
+}
+
+function resetHorseJump(scene, cooldownUntil = 0) {
+  scene.isJumping = false;
+  scene.jumpStartedAt = 0;
+  scene.jumpCooldownUntil = cooldownUntil;
+  scene.horse?.setDisplayOrigin(64, 64);
+  scene.horse?.setScale(1);
+  scene.horseShadow?.setScale(1);
+  scene.horseShadow?.setAlpha(scene.restingShadowAlpha ?? 0.25);
+}
+
+function updateHorseJump(scene, time) {
+  if (!scene.isJumping) {
+    scene.horse.setDisplayOrigin(64, 64);
+    return;
+  }
+
+  const progress = Phaser.Math.Clamp(
+    (time - scene.jumpStartedAt) / JUMP_DURATION_MS,
+    0,
+    1,
+  );
+  const arc = Math.sin(progress * Math.PI);
+  const height = Math.round(arc * JUMP_HEIGHT);
+  const restingAlpha = scene.restingShadowAlpha ?? 0.25;
+
+  // Lift only the rendered sprite so its physics body keeps moving forward.
+  scene.horse.setDisplayOrigin(64, 64 + height);
+  scene.horse.setScale(1 + arc * 0.06);
+  scene.horseShadow.setScale(1 - arc * 0.38, 1 - arc * 0.24);
+  scene.horseShadow.setAlpha(restingAlpha - arc * 0.18);
+
+  if (progress >= 1) {
+    resetHorseJump(scene, scene.jumpCooldownUntil);
+    scene.updateShadow?.(0);
+  }
+}
+
 function emitHoofDust(scene, direction, gait, delta, depth) {
   if (!gait.dustInterval) return 0;
 
@@ -167,6 +238,35 @@ function emitHoofDust(scene, direction, gait, delta, depth) {
   }
 
   return elapsed % gait.dustInterval;
+}
+
+function ensureHeartTextures(scene) {
+  if (
+    scene.textures.exists("heart-full") &&
+    scene.textures.exists("heart-empty")
+  ) {
+    return;
+  }
+
+  const createHeart = (key, fillColor) => {
+    const heart = scene.make.graphics({ x: 0, y: 0, add: false });
+    heart.fillStyle(0x3b1f21);
+    heart.fillRect(2, 0, 4, 2);
+    heart.fillRect(10, 0, 4, 2);
+    heart.fillRect(0, 2, 16, 6);
+    heart.fillRect(2, 8, 12, 2);
+    heart.fillRect(4, 10, 8, 2);
+    heart.fillRect(6, 12, 4, 2);
+    heart.fillStyle(fillColor);
+    heart.fillRect(2, 2, 12, 4);
+    heart.fillRect(4, 6, 8, 2);
+    heart.fillRect(6, 8, 4, 2);
+    heart.generateTexture(key, 16, 14);
+    heart.destroy();
+  };
+
+  createHeart("heart-full", 0xe84f4f);
+  createHeart("heart-empty", 0x5d4b4b);
 }
 
 const FACILITIES = [
@@ -488,6 +588,11 @@ class ProgressScene extends Phaser.Scene {
     super(key);
     this.autosaveElapsed = 0;
     this.pageHideHandler = null;
+    this.horseHud = null;
+    this.minimapGraphics = null;
+    this.minimapBounds = null;
+    this.minimapElapsed = 0;
+    this.minimapEnabled = true;
   }
 
   get progress() {
@@ -496,6 +601,348 @@ class ProgressScene extends Phaser.Scene {
 
   get progressStore() {
     return this.registry.get("progressStore");
+  }
+
+  installHorseControls() {
+    this.keys = createHorseControls(this);
+  }
+
+  resetHorseControls() {
+    resetKeys(this.keys, HORSE_CONTROL_NAMES);
+  }
+
+  createHorseHud(offsetX = 0, offsetY = 0, showMinimap = true) {
+    this.minimapEnabled = showMinimap;
+    ensureHeartTextures(this);
+    const panelX = 18 + offsetX;
+    const panelY = 18 + offsetY;
+    const panelWidth = 250;
+    const panelHeight = 108;
+    const heartIcons = [];
+
+    this.add
+      .rectangle(
+        panelX,
+        panelY,
+        panelWidth,
+        panelHeight,
+        0x142416,
+        0.88,
+      )
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setStrokeStyle(3, 0xb7d878);
+
+    for (let i = 0; i < MAX_LIVES; i += 1) {
+      heartIcons.push(
+        this.add
+          .image(panelX + 16 + i * 30, panelY + 11, "heart-full")
+          .setOrigin(0)
+          .setScale(1.25)
+          .setScrollFactor(0)
+          .setDepth(101),
+      );
+    }
+
+    this.add
+      .text(panelX + 108, panelY + 11, "HORSIN' AROUND", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "13px",
+        fontStyle: "bold",
+        color: "#fff4bd",
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    const gaitText = this.add
+      .text(panelX + 16, panelY + 39, "GAIT: STANDING", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "13px",
+        fontStyle: "bold",
+        color: GAITS.idle.color,
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    const speedText = this.add
+      .text(panelX + panelWidth - 16, panelY + 39, "SPEED 0", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "11px",
+        fontStyle: "bold",
+        color: "#fff4bd",
+        resolution: 2,
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.add
+      .rectangle(
+        panelX + 16,
+        panelY + 63,
+        panelWidth - 32,
+        7,
+        0x324735,
+        1,
+      )
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    const speedBar = this.add
+      .rectangle(
+        panelX + 16,
+        panelY + 63,
+        panelWidth - 32,
+        7,
+        0xff8a5b,
+        1,
+      )
+      .setOrigin(0)
+      .setScale(0, 1)
+      .setScrollFactor(0)
+      .setDepth(102);
+
+    const chargeText = this.add
+      .text(panelX + 16, panelY + 77, "", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "9px",
+        color: "#a9bd9a",
+        resolution: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
+    this.horseHud = {
+      heartIcons,
+      gaitText,
+      speedText,
+      speedBar,
+      chargeText,
+    };
+    if (this.minimapEnabled) {
+      this.createMinimap(offsetX, offsetY);
+    }
+    this.updateHorseHud();
+    if (this.minimapEnabled) {
+      this.updateMinimap(0, true);
+    }
+  }
+
+  updateHorseHud(delta = 0, forceMinimap = false) {
+    if (!this.horseHud) return;
+
+    const {
+      heartIcons,
+      gaitText,
+      speedText,
+      speedBar,
+      chargeText,
+    } = this.horseHud;
+    for (let i = 0; i < heartIcons.length; i += 1) {
+      heartIcons[i].setTexture(
+        i < this.progress.lives ? "heart-full" : "heart-empty",
+      );
+    }
+
+    const gait = GAITS[this.currentGait] ?? GAITS.idle;
+    const currentSpeed = this.horse?.body?.velocity.length() ?? 0;
+    const targetSpeedProgress = Phaser.Math.Clamp(
+      currentSpeed / GAITS.gallop.speed,
+      0,
+      1,
+    );
+    const blend = delta > 0 ? 1 - Math.exp(-delta / 180) : 1;
+    const speedProgress = Phaser.Math.Linear(
+      speedBar.scaleX,
+      targetSpeedProgress,
+      blend,
+    );
+    const gallopProgress = Phaser.Math.Clamp(
+      this.gallopCharge / GALLOP_CHARGE_MS,
+      0,
+      1,
+    );
+
+    gaitText.setText(`GAIT: ${gait.label}`).setColor(gait.color);
+    speedText.setText(`SPEED ${Math.round(currentSpeed)}`);
+    speedBar.setScale(speedProgress, 1);
+
+    if (this.currentGait === "gallop") {
+      chargeText
+        .setText("FULL GALLOP!")
+        .setColor(GAITS.gallop.color);
+    } else if (this.currentGait === "canter") {
+      chargeText
+        .setText(`GALLOP CHARGE ${Math.floor(gallopProgress * 100)}%`)
+        .setColor(GAITS.canter.color);
+    } else {
+      chargeText.setText("");
+    }
+    if (this.minimapEnabled) {
+      this.updateMinimap(delta, forceMinimap);
+    }
+  }
+
+  createMinimap(hudOffsetX = 0, hudOffsetY = 0) {
+    const panelWidth = 180;
+    const panelHeight = 140;
+    const panelX = 960 - hudOffsetX - panelWidth;
+    const panelY = 540 - hudOffsetY - panelHeight;
+    const mapX = panelX + 8;
+    const mapY = panelY + 8;
+    const mapWidth = panelWidth - 16;
+    const mapHeight = panelHeight - 16;
+
+    this.minimapBounds = {
+      x: mapX,
+      y: mapY,
+      width: mapWidth,
+      height: mapHeight,
+      centerX: mapX + mapWidth / 2,
+      centerY: mapY + mapHeight / 2,
+    };
+
+    this.add
+      .rectangle(
+        panelX,
+        panelY,
+        panelWidth,
+        panelHeight,
+        0x142416,
+        0.9,
+      )
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setStrokeStyle(3, 0xb7d878);
+
+    this.add
+      .rectangle(mapX, mapY, mapWidth, mapHeight, 0x315d32, 1)
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setStrokeStyle(1, 0x7aa85c);
+
+    const grid = this.add
+      .graphics()
+      .setScrollFactor(0)
+      .setDepth(101);
+    grid.lineStyle(1, 0x6f9854, 0.22);
+    grid.lineBetween(
+      this.minimapBounds.centerX,
+      mapY + 1,
+      this.minimapBounds.centerX,
+      mapY + mapHeight - 1,
+    );
+    grid.lineBetween(
+      mapX + 1,
+      this.minimapBounds.centerY,
+      mapX + mapWidth - 1,
+      this.minimapBounds.centerY,
+    );
+
+    this.minimapGraphics = this.add
+      .graphics()
+      .setScrollFactor(0)
+      .setDepth(102);
+  }
+
+  getMinimapWorldAnchor() {
+    if (this.sys.settings.key === "meadow" && this.horse) {
+      return { x: this.horse.x, y: this.horse.y };
+    }
+
+    const facility =
+      this.facility ?? FACILITY_BY_ID.get(this.progress.location.id);
+    return facility?.entrance ?? { x: START_X, y: START_Y };
+  }
+
+  getMinimapObstacles() {
+    const meadow =
+      this.sys.settings.key === "meadow"
+        ? this
+        : this.scene.get("meadow");
+    return meadow?.obstacles?.getChildren() ?? [];
+  }
+
+  updateMinimap(delta = 0, force = false) {
+    if (!this.minimapGraphics || !this.minimapBounds) return;
+
+    this.minimapElapsed += delta;
+    if (!force && this.minimapElapsed < MINIMAP_REFRESH_MS) return;
+    this.minimapElapsed = 0;
+
+    const anchor = this.getMinimapWorldAnchor();
+    const bounds = this.minimapBounds;
+    const halfHeight =
+      MINIMAP_WORLD_HALF_WIDTH * (bounds.height / bounds.width);
+    const scaleX = bounds.width / (MINIMAP_WORLD_HALF_WIDTH * 2);
+    const scaleY = bounds.height / (halfHeight * 2);
+    const graphics = this.minimapGraphics;
+    graphics.clear();
+
+    for (const obstacle of this.getMinimapObstacles()) {
+      const offsetX = obstacle.x - anchor.x;
+      const offsetY = obstacle.y - anchor.y;
+      if (
+        Math.abs(offsetX) > MINIMAP_WORLD_HALF_WIDTH ||
+        Math.abs(offsetY) > halfHeight
+      ) {
+        continue;
+      }
+
+      const markerX = bounds.centerX + offsetX * scaleX;
+      const markerY = bounds.centerY + offsetY * scaleY;
+      const isPuddle = obstacle.texture.key === "puddle";
+      graphics.fillStyle(isPuddle ? 0x64b5cf : 0xc98742, 0.9);
+      if (isPuddle) {
+        graphics.fillRect(markerX - 2, markerY - 1, 4, 2);
+      } else {
+        graphics.fillRect(markerX - 1.5, markerY - 1.5, 3, 3);
+      }
+    }
+
+    const markerPadding = 8;
+    for (const facility of FACILITIES) {
+      const offsetX = facility.entrance.x - anchor.x;
+      const offsetY = facility.entrance.y - anchor.y;
+      const unclampedX = bounds.centerX + offsetX * scaleX;
+      const unclampedY = bounds.centerY + offsetY * scaleY;
+      const markerX = Phaser.Math.Clamp(
+        unclampedX,
+        bounds.x + markerPadding,
+        bounds.x + bounds.width - markerPadding,
+      );
+      const markerY = Phaser.Math.Clamp(
+        unclampedY,
+        bounds.y + markerPadding,
+        bounds.y + bounds.height - markerPadding,
+      );
+
+      if (facility.type === "stable") {
+        graphics.fillStyle(0xffd06a, 1);
+        graphics.fillRect(markerX - 4, markerY - 4, 8, 8);
+        graphics.fillStyle(0x60401f, 1);
+        graphics.fillRect(markerX - 1, markerY - 1, 3, 3);
+      } else if (facility.type === "hospital") {
+        graphics.fillStyle(0xff8291, 1);
+        graphics.fillRect(markerX - 4, markerY - 1.5, 8, 3);
+        graphics.fillRect(markerX - 1.5, markerY - 4, 3, 8);
+      } else {
+        graphics.lineStyle(2, 0x79d8ff, 1);
+        graphics.strokeCircle(markerX, markerY, 4);
+      }
+    }
+
+    graphics.fillStyle(0xffffff, 1);
+    graphics.fillRect(bounds.centerX - 3, bounds.centerY - 1, 7, 3);
+    graphics.fillRect(bounds.centerX - 1, bounds.centerY - 3, 3, 7);
+    graphics.fillStyle(0x3b1f21, 1);
+    graphics.fillRect(bounds.centerX, bounds.centerY, 1, 1);
   }
 
   saveLocation(type, id, x, y, entranceId = null, force = false, delta = 0) {
@@ -772,20 +1219,13 @@ class MeadowScene extends ProgressScene {
     this.isJumping = false;
     this.jumpStartedAt = 0;
     this.jumpCooldownUntil = 0;
-    this.heartIcons = [];
-    this.gaitText = null;
-    this.gallopText = null;
-    this.gallopBar = null;
-    this.minimapGraphics = null;
-    this.minimapBounds = null;
-    this.minimapElapsed = 0;
+    this.restingShadowAlpha = 0.25;
   }
 
   create() {
     this.createGrassTexture();
     this.createObstacleTextures();
     this.createFacilityTextures();
-    this.createHeartTextures();
     this.add
       .tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, "grass")
       .setOrigin(0);
@@ -835,27 +1275,7 @@ class MeadowScene extends ProgressScene {
     this.cameras.main.startFollow(this.horse, true, 0.09, 0.09);
     this.cameras.main.setZoom(1.15);
 
-    this.keys = this.input.keyboard.addKeys({
-      up: Phaser.Input.Keyboard.KeyCodes.W,
-      left: Phaser.Input.Keyboard.KeyCodes.A,
-      down: Phaser.Input.Keyboard.KeyCodes.S,
-      right: Phaser.Input.Keyboard.KeyCodes.D,
-      walk: Phaser.Input.Keyboard.KeyCodes.V,
-      run: Phaser.Input.Keyboard.KeyCodes.SHIFT,
-      jump: Phaser.Input.Keyboard.KeyCodes.SPACE,
-      enter: Phaser.Input.Keyboard.KeyCodes.E,
-    });
-
-    this.input.keyboard.addCapture([
-      Phaser.Input.Keyboard.KeyCodes.W,
-      Phaser.Input.Keyboard.KeyCodes.A,
-      Phaser.Input.Keyboard.KeyCodes.S,
-      Phaser.Input.Keyboard.KeyCodes.D,
-      Phaser.Input.Keyboard.KeyCodes.V,
-      Phaser.Input.Keyboard.KeyCodes.SHIFT,
-      Phaser.Input.Keyboard.KeyCodes.SPACE,
-      Phaser.Input.Keyboard.KeyCodes.E,
-    ]);
+    this.installHorseControls();
 
     this.entrancePrompt = this.add
       .text(0, 0, "", {
@@ -894,14 +1314,14 @@ class MeadowScene extends ProgressScene {
     if (
       this.nearbyFacility &&
       !this.isJumping &&
-      Phaser.Input.Keyboard.JustDown(this.keys.enter)
+      Phaser.Input.Keyboard.JustDown(this.keys.interact)
     ) {
       this.enterFacility(this.nearbyFacility);
       return;
     }
 
     if (Phaser.Input.Keyboard.JustDown(this.keys.jump)) {
-      this.startJump(time);
+      startHorseJump(this, time, this.knockbackUntil);
     }
 
     if (time < this.knockbackUntil) {
@@ -910,7 +1330,8 @@ class MeadowScene extends ProgressScene {
         this.knockbackVelocity.y,
       );
       this.updateShadow(0);
-      this.updateJump(time);
+      updateHorseJump(this, time);
+      this.updateHorseHud(delta);
       return;
     }
 
@@ -932,8 +1353,8 @@ class MeadowScene extends ProgressScene {
       this.dustTimer = 0;
       this.horse.setTexture(`horse-${this.currentFacing}-idle`);
       this.updateShadow(0);
-      this.updateJump(time);
-      this.updateGaitHud();
+      updateHorseJump(this, time);
+      this.updateHorseHud(delta);
       return;
     }
 
@@ -951,8 +1372,8 @@ class MeadowScene extends ProgressScene {
     this.setHorseCollider(facing);
     this.updateHorseAnimation(gait, delta);
     this.emitDust(direction, gait, delta);
-    this.updateJump(time);
-    this.updateGaitHud();
+    updateHorseJump(this, time);
+    this.updateHorseHud(delta);
   }
 
   updateHorseAnimation(gait, delta) {
@@ -983,7 +1404,6 @@ class MeadowScene extends ProgressScene {
 
   updateWorldSystems(delta) {
     this.chunkManager?.update(this.horse.x, this.horse.y);
-    this.updateMinimap(delta);
     this.saveLocation(
       "world",
       "meadow",
@@ -1069,29 +1489,18 @@ class MeadowScene extends ProgressScene {
     this.animationAccumulator = 0;
     this.dustTimer = 0;
     this.knockbackUntil = 0;
-    this.isJumping = false;
+    resetHorseJump(this);
     this.isTransitioning = false;
     this.nearbyFacility = null;
     this.entrancePrompt.setVisible(false);
     this.setHorseCollider("s");
-    resetKeys(this.keys, [
-      "up",
-      "left",
-      "down",
-      "right",
-      "walk",
-      "run",
-      "jump",
-      "enter",
-    ]);
+    this.resetHorseControls();
     this.horseShadow.setPosition(
       returnPosition.x,
       returnPosition.y + 31,
     );
     this.chunkManager.update(returnPosition.x, returnPosition.y);
-    this.updateHearts();
-    this.updateGaitHud();
-    this.updateMinimap(0, true);
+    this.updateHorseHud(0, true);
     this.cameras.main.fadeIn(180, 20, 36, 22);
   }
 
@@ -1174,48 +1583,6 @@ class MeadowScene extends ProgressScene {
     return null;
   }
 
-  startJump(time) {
-    if (
-      this.isJumping ||
-      time < this.jumpCooldownUntil ||
-      time < this.knockbackUntil
-    ) {
-      return;
-    }
-
-    this.isJumping = true;
-    this.jumpStartedAt = time;
-    this.jumpCooldownUntil = time + JUMP_COOLDOWN_MS;
-  }
-
-  updateJump(time) {
-    if (!this.isJumping) {
-      this.horse.setDisplayOrigin(64, 64);
-      return;
-    }
-
-    const progress = Phaser.Math.Clamp(
-      (time - this.jumpStartedAt) / JUMP_DURATION_MS,
-      0,
-      1,
-    );
-    const arc = Math.sin(progress * Math.PI);
-    const height = Math.round(arc * JUMP_HEIGHT);
-
-    // Lift only the rendered sprite so the physics body keeps its trajectory.
-    this.horse.setDisplayOrigin(64, 64 + height);
-    this.horse.setScale(1 + arc * 0.06);
-    this.horseShadow.setScale(1 - arc * 0.38, 1 - arc * 0.24);
-    this.horseShadow.setAlpha(0.25 - arc * 0.18);
-
-    if (progress >= 1) {
-      this.isJumping = false;
-      this.horse.setDisplayOrigin(64, 64);
-      this.horse.setScale(1);
-      this.updateShadow(0);
-    }
-  }
-
   canCollideWithObstacle() {
     return !this.isJumping;
   }
@@ -1233,7 +1600,7 @@ class MeadowScene extends ProgressScene {
 
     this.hitCooldownUntil = now + HIT_COOLDOWN_MS;
     this.progress.lives -= damage;
-    this.updateHearts();
+    this.updateHorseHud();
     this.showCollisionMessage(`-${damage} HEART${damage > 1 ? "S" : ""}`, "#ff776d");
     this.cameras.main.shake(130 + damage * 35, 0.004 + damage * 0.002);
 
@@ -1276,9 +1643,7 @@ class MeadowScene extends ProgressScene {
     this.movementFrame = 0;
     this.animationAccumulator = 0;
     this.knockbackUntil = 0;
-    this.isJumping = false;
-    this.jumpStartedAt = 0;
-    this.jumpCooldownUntil = this.time.now + 500;
+    resetHorseJump(this, this.time.now + 500);
     this.hitCooldownUntil = this.time.now + 1200;
     this.horse.body.reset(resetPosition.x, resetPosition.y);
     this.horse.setTexture("horse-n-idle");
@@ -1291,10 +1656,9 @@ class MeadowScene extends ProgressScene {
       resetPosition.x,
       resetPosition.y + 31,
     );
-    this.updateHearts();
+    this.updateHorseHud();
     this.showCollisionMessage("BACK TO THE PADDOCK!", "#fff4bd");
     this.cameras.main.flash(220, 255, 244, 189, false);
-    this.updateGaitHud();
     this.progressStore.save(this.progress);
   }
 
@@ -1613,35 +1977,6 @@ class MeadowScene extends ProgressScene {
     }
   }
 
-  createHeartTextures() {
-    if (
-      this.textures.exists("heart-full") &&
-      this.textures.exists("heart-empty")
-    ) {
-      return;
-    }
-
-    const createHeart = (key, fillColor) => {
-      const heart = this.make.graphics({ x: 0, y: 0, add: false });
-      heart.fillStyle(0x3b1f21);
-      heart.fillRect(2, 0, 4, 2);
-      heart.fillRect(10, 0, 4, 2);
-      heart.fillRect(0, 2, 16, 6);
-      heart.fillRect(2, 8, 12, 2);
-      heart.fillRect(4, 10, 8, 2);
-      heart.fillRect(6, 12, 4, 2);
-      heart.fillStyle(fillColor);
-      heart.fillRect(2, 2, 12, 4);
-      heart.fillRect(4, 6, 8, 2);
-      heart.fillRect(6, 8, 4, 2);
-      heart.generateTexture(key, 16, 14);
-      heart.destroy();
-    };
-
-    createHeart("heart-full", 0xe84f4f);
-    createHeart("heart-empty", 0x5d4b4b);
-  }
-
   createGrassTexture() {
     if (this.textures.exists("grass")) return;
 
@@ -1681,247 +2016,9 @@ class MeadowScene extends ProgressScene {
     // to remain inside the visible top-left safe area.
     const hudOffsetX = 62;
     const hudOffsetY = 35;
-    const panel = this.add
-      .rectangle(18 + hudOffsetX, 18 + hudOffsetY, 250, 108, 0x142416, 0.88)
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(100);
-    panel.setStrokeStyle(3, 0xb7d878);
-
-    for (let i = 0; i < MAX_LIVES; i += 1) {
-      this.heartIcons.push(
-        this.add
-          .image(34 + hudOffsetX + i * 30, 29 + hudOffsetY, "heart-full")
-          .setOrigin(0)
-          .setScale(1.25)
-          .setScrollFactor(0)
-          .setDepth(101),
-      );
-    }
-
-    this.add
-      .text(126 + hudOffsetX, 29 + hudOffsetY, "HORSIN' AROUND", {
-        fontFamily: '"Courier New", monospace',
-        fontSize: "13px",
-        fontStyle: "bold",
-        color: "#fff4bd",
-        resolution: 2,
-      })
-      .setScrollFactor(0)
-      .setDepth(101);
-
-    this.gaitText = this.add
-      .text(34 + hudOffsetX, 57 + hudOffsetY, "GAIT: STANDING", {
-        fontFamily: '"Courier New", monospace',
-        fontSize: "13px",
-        fontStyle: "bold",
-        color: GAITS.idle.color,
-        resolution: 2,
-      })
-      .setScrollFactor(0)
-      .setDepth(101);
-
-    this.add
-      .rectangle(34 + hudOffsetX, 79 + hudOffsetY, 218, 6, 0x324735, 1)
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(101);
-
-    this.gallopBar = this.add
-      .rectangle(34 + hudOffsetX, 79 + hudOffsetY, 218, 6, 0xff8a5b, 1)
-      .setOrigin(0)
-      .setScale(0, 1)
-      .setScrollFactor(0)
-      .setDepth(102);
-
-    this.gallopText = this.add
-      .text(34 + hudOffsetX, 90 + hudOffsetY, "", {
-        fontFamily: '"Courier New", monospace',
-        fontSize: "9px",
-        color: "#a9bd9a",
-        resolution: 2,
-      })
-      .setScrollFactor(0)
-      .setDepth(101);
-
-    this.createMinimap(hudOffsetX, hudOffsetY);
-    this.updateHearts();
-    this.updateGaitHud();
-    this.updateMinimap(0, true);
+    this.createHorseHud(hudOffsetX, hudOffsetY);
   }
 
-  createMinimap(hudOffsetX, hudOffsetY) {
-    const panelWidth = 180;
-    const panelHeight = 140;
-    const panelX = 960 - hudOffsetX - panelWidth;
-    const panelY = 540 - hudOffsetY - panelHeight;
-    const mapX = panelX + 8;
-    const mapY = panelY + 8;
-    const mapWidth = panelWidth - 16;
-    const mapHeight = panelHeight - 16;
-
-    this.minimapBounds = {
-      x: mapX,
-      y: mapY,
-      width: mapWidth,
-      height: mapHeight,
-      centerX: mapX + mapWidth / 2,
-      centerY: mapY + mapHeight / 2,
-    };
-
-    this.add
-      .rectangle(
-        panelX,
-        panelY,
-        panelWidth,
-        panelHeight,
-        0x142416,
-        0.9,
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(100)
-      .setStrokeStyle(3, 0xb7d878);
-
-    this.add
-      .rectangle(mapX, mapY, mapWidth, mapHeight, 0x315d32, 1)
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(101)
-      .setStrokeStyle(1, 0x7aa85c);
-
-    const grid = this.add
-      .graphics()
-      .setScrollFactor(0)
-      .setDepth(101);
-    grid.lineStyle(1, 0x6f9854, 0.22);
-    grid.lineBetween(
-      this.minimapBounds.centerX,
-      mapY + 1,
-      this.minimapBounds.centerX,
-      mapY + mapHeight - 1,
-    );
-    grid.lineBetween(
-      mapX + 1,
-      this.minimapBounds.centerY,
-      mapX + mapWidth - 1,
-      this.minimapBounds.centerY,
-    );
-
-    this.minimapGraphics = this.add
-      .graphics()
-      .setScrollFactor(0)
-      .setDepth(102);
-  }
-
-  updateMinimap(delta = 0, force = false) {
-    if (!this.minimapGraphics || !this.minimapBounds || !this.horse) {
-      return;
-    }
-
-    this.minimapElapsed += delta;
-    if (!force && this.minimapElapsed < MINIMAP_REFRESH_MS) return;
-    this.minimapElapsed = 0;
-
-    const bounds = this.minimapBounds;
-    const halfHeight =
-      MINIMAP_WORLD_HALF_WIDTH * (bounds.height / bounds.width);
-    const scaleX = bounds.width / (MINIMAP_WORLD_HALF_WIDTH * 2);
-    const scaleY = bounds.height / (halfHeight * 2);
-    const graphics = this.minimapGraphics;
-    graphics.clear();
-
-    for (const obstacle of this.obstacles.getChildren()) {
-      const offsetX = obstacle.x - this.horse.x;
-      const offsetY = obstacle.y - this.horse.y;
-      if (
-        Math.abs(offsetX) > MINIMAP_WORLD_HALF_WIDTH ||
-        Math.abs(offsetY) > halfHeight
-      ) {
-        continue;
-      }
-
-      const markerX = bounds.centerX + offsetX * scaleX;
-      const markerY = bounds.centerY + offsetY * scaleY;
-      const isPuddle = obstacle.texture.key === "puddle";
-      graphics.fillStyle(isPuddle ? 0x64b5cf : 0xc98742, 0.9);
-      if (isPuddle) {
-        graphics.fillRect(markerX - 2, markerY - 1, 4, 2);
-      } else {
-        graphics.fillRect(markerX - 1.5, markerY - 1.5, 3, 3);
-      }
-    }
-
-    const markerPadding = 8;
-    for (const facility of FACILITIES) {
-      const offsetX = facility.entrance.x - this.horse.x;
-      const offsetY = facility.entrance.y - this.horse.y;
-      const unclampedX = bounds.centerX + offsetX * scaleX;
-      const unclampedY = bounds.centerY + offsetY * scaleY;
-      const markerX = Phaser.Math.Clamp(
-        unclampedX,
-        bounds.x + markerPadding,
-        bounds.x + bounds.width - markerPadding,
-      );
-      const markerY = Phaser.Math.Clamp(
-        unclampedY,
-        bounds.y + markerPadding,
-        bounds.y + bounds.height - markerPadding,
-      );
-
-      if (facility.type === "stable") {
-        graphics.fillStyle(0xffd06a, 1);
-        graphics.fillRect(markerX - 4, markerY - 4, 8, 8);
-        graphics.fillStyle(0x60401f, 1);
-        graphics.fillRect(markerX - 1, markerY - 1, 3, 3);
-      } else if (facility.type === "hospital") {
-        graphics.fillStyle(0xff8291, 1);
-        graphics.fillRect(markerX - 4, markerY - 1.5, 8, 3);
-        graphics.fillRect(markerX - 1.5, markerY - 4, 3, 8);
-      } else {
-        graphics.lineStyle(2, 0x79d8ff, 1);
-        graphics.strokeCircle(markerX, markerY, 4);
-      }
-    }
-
-    graphics.fillStyle(0xffffff, 1);
-    graphics.fillRect(bounds.centerX - 3, bounds.centerY - 1, 7, 3);
-    graphics.fillRect(bounds.centerX - 1, bounds.centerY - 3, 3, 7);
-    graphics.fillStyle(0x3b1f21, 1);
-    graphics.fillRect(bounds.centerX, bounds.centerY, 1, 1);
-  }
-
-  updateHearts() {
-    for (let i = 0; i < this.heartIcons.length; i += 1) {
-      this.heartIcons[i].setTexture(
-        i < this.progress.lives ? "heart-full" : "heart-empty",
-      );
-    }
-  }
-
-  updateGaitHud() {
-    const gait = GAITS[this.currentGait];
-    const progress = Phaser.Math.Clamp(
-      this.gallopCharge / GALLOP_CHARGE_MS,
-      0,
-      1,
-    );
-
-    this.gaitText
-      .setText(`GAIT: ${gait.label}`)
-      .setColor(gait.color);
-    this.gallopBar.setScale(progress, 1);
-
-    if (this.currentGait === "gallop") {
-      this.gallopText.setText("FULL GALLOP!").setColor(GAITS.gallop.color);
-    } else if (this.currentGait === "canter") {
-      this.gallopText
-        .setText(`GALLOP: ${Math.floor(progress * 100)}%`)
-        .setColor(GAITS.canter.color);
-    } else {
-      this.gallopText.setText("");
-    }
-  }
 }
 
 class BaseInteriorScene extends ProgressScene {
@@ -1941,6 +2038,10 @@ class BaseInteriorScene extends ProgressScene {
     this.movementFrame = 0;
     this.animationAccumulator = 0;
     this.dustTimer = 0;
+    this.isJumping = false;
+    this.jumpStartedAt = 0;
+    this.jumpCooldownUntil = 0;
+    this.restingShadowAlpha = 0.28;
     this.exitPoint = { x: width / 2, y: height - 44 };
     this.exitPrompt = null;
     this.isTransitioning = false;
@@ -1989,38 +2090,32 @@ class BaseInteriorScene extends ProgressScene {
       this.interiorWidth - 48,
       this.interiorHeight - 48,
     );
-    this.physics.add.collider(this.horse, this.wallGroup);
+    this.physics.add.collider(
+      this.horse,
+      this.wallGroup,
+      undefined,
+      this.canCollideWithInteriorWall,
+      this,
+    );
     this.setHorseCollider("n");
 
-    this.keys = this.input.keyboard.addKeys({
-      up: Phaser.Input.Keyboard.KeyCodes.W,
-      left: Phaser.Input.Keyboard.KeyCodes.A,
-      down: Phaser.Input.Keyboard.KeyCodes.S,
-      right: Phaser.Input.Keyboard.KeyCodes.D,
-      walk: Phaser.Input.Keyboard.KeyCodes.V,
-      run: Phaser.Input.Keyboard.KeyCodes.SHIFT,
-      exit: Phaser.Input.Keyboard.KeyCodes.E,
-    });
-    this.input.keyboard.addCapture([
-      Phaser.Input.Keyboard.KeyCodes.W,
-      Phaser.Input.Keyboard.KeyCodes.A,
-      Phaser.Input.Keyboard.KeyCodes.S,
-      Phaser.Input.Keyboard.KeyCodes.D,
-      Phaser.Input.Keyboard.KeyCodes.V,
-      Phaser.Input.Keyboard.KeyCodes.SHIFT,
-      Phaser.Input.Keyboard.KeyCodes.E,
-    ]);
+    this.installHorseControls();
 
     this.exitPrompt = this.add
-      .text(this.exitPoint.x, this.exitPoint.y - 48, "E  RETURN TO MEADOW", {
-        fontFamily: '"Courier New", monospace',
-        fontSize: "12px",
-        fontStyle: "bold",
-        color: "#fff4bd",
-        backgroundColor: "#142416",
-        padding: { x: 6, y: 4 },
-        resolution: 2,
-      })
+      .text(
+        this.exitPoint.x,
+        this.exitPoint.y - 48,
+        this.getExitPromptText(),
+        {
+          fontFamily: '"Courier New", monospace',
+          fontSize: "12px",
+          fontStyle: "bold",
+          color: "#fff4bd",
+          backgroundColor: "#142416",
+          padding: { x: 6, y: 4 },
+          resolution: 2,
+        },
+      )
       .setOrigin(0.5)
       .setDepth(40)
       .setVisible(false);
@@ -2050,7 +2145,9 @@ class BaseInteriorScene extends ProgressScene {
     this.cameras.main.setBackgroundColor("#182418");
     this.cameras.main.fadeIn(220, 20, 36, 22);
 
+    this.createHorseHud(0, 0, this.shouldShowMinimap());
     this.onFacilityEntered();
+    this.updateHorseHud();
     this.progressStore.save(this.progress);
     this.installPageSave(() => ({
       type: "interior",
@@ -2083,26 +2180,24 @@ class BaseInteriorScene extends ProgressScene {
     this.movementFrame = 0;
     this.animationAccumulator = 0;
     this.dustTimer = 0;
+    resetHorseJump(this);
     this.setHorseCollider("n");
     this.horseShadow.setPosition(spawn.x, spawn.y + 31);
     this.exitPrompt.setVisible(false);
-    resetKeys(this.keys, [
-      "up",
-      "left",
-      "down",
-      "right",
-      "walk",
-      "run",
-      "exit",
-    ]);
+    this.resetHorseControls();
     this.isTransitioning = false;
     this.onFacilityEntered();
+    this.updateHorseHud();
     this.progressStore.save(this.progress);
     this.cameras.main.fadeIn(180, 20, 36, 22);
   }
 
   update(time, delta) {
     if (this.isTransitioning || !this.horse) return;
+
+    if (Phaser.Input.Keyboard.JustDown(this.keys.jump)) {
+      startHorseJump(this, time);
+    }
 
     const horizontal =
       Number(this.keys.right.isDown) - Number(this.keys.left.isDown);
@@ -2148,18 +2243,19 @@ class BaseInteriorScene extends ProgressScene {
     }
 
     this.horseShadow.setPosition(this.horse.x, this.horse.y + 31);
+    updateHorseJump(this, time);
     const nearExit =
       Phaser.Math.Distance.Between(
         this.horse.x,
         this.horse.y,
         this.exitPoint.x,
         this.exitPoint.y,
-      ) < 92;
+      ) < this.getExitPromptDistance();
     this.exitPrompt.setVisible(nearExit);
 
     if (
       nearExit &&
-      Phaser.Input.Keyboard.JustDown(this.keys.exit)
+      Phaser.Input.Keyboard.JustDown(this.keys.interact)
     ) {
       this.exitFacility();
       return;
@@ -2175,6 +2271,7 @@ class BaseInteriorScene extends ProgressScene {
       delta,
     );
     this.updateFacility(time, delta);
+    this.updateHorseHud(delta);
   }
 
   createCollisionTexture() {
@@ -2186,12 +2283,14 @@ class BaseInteriorScene extends ProgressScene {
     pixel.destroy();
   }
 
-  addCollisionRect(x, y, width, height) {
-    return this.wallGroup
+  addCollisionRect(x, y, width, height, blocksJump = false) {
+    const wall = this.wallGroup
       .create(x, y, "interior-collision")
       .setDisplaySize(width, height)
       .setVisible(false)
       .refreshBody();
+    wall.blocksJump = blocksJump;
+    return wall;
   }
 
   createBoundaryWalls() {
@@ -2201,25 +2300,33 @@ class BaseInteriorScene extends ProgressScene {
       thickness / 2,
       this.interiorWidth,
       thickness,
+      true,
     );
     this.addCollisionRect(
       this.interiorWidth / 2,
       this.interiorHeight - thickness / 2,
       this.interiorWidth,
       thickness,
+      true,
     );
     this.addCollisionRect(
       thickness / 2,
       this.interiorHeight / 2,
       thickness,
       this.interiorHeight,
+      true,
     );
     this.addCollisionRect(
       this.interiorWidth - thickness / 2,
       this.interiorHeight / 2,
       thickness,
       this.interiorHeight,
+      true,
     );
+  }
+
+  canCollideWithInteriorWall(horse, wall) {
+    return !this.isJumping || wall.blocksJump;
   }
 
   isInteriorPositionSafe(x, y) {
@@ -2337,8 +2444,20 @@ class BaseInteriorScene extends ProgressScene {
 
   buildInterior() {}
 
+  shouldShowMinimap() {
+    return true;
+  }
+
+  getExitPromptText() {
+    return "E  RETURN TO MEADOW";
+  }
+
+  getExitPromptDistance() {
+    return 92;
+  }
+
   getFacilityTitleLayout() {
-    return { x: 18, y: 18, originX: 0 };
+    return { x: 942, y: 18, originX: 1 };
   }
 
   onFacilityEntered() {}
@@ -2467,10 +2586,8 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.nextCheckpoint = 0;
     this.lapStartedAt = null;
     this.trackStatus = null;
-    this.arenaGaitText = null;
-    this.arenaSpeedText = null;
-    this.arenaChargeText = null;
-    this.arenaSpeedBar = null;
+    this.lapTimerText = null;
+    this.exitMarker = null;
   }
 
   buildInterior() {
@@ -2601,6 +2718,28 @@ class TrackInteriorScene extends BaseInteriorScene {
       track.fillRect(centerX, y, 12, 16);
     }
 
+    // A high-contrast lane and arrow make the arena exit readable at speed.
+    track.fillStyle(0x2b1b16, 0.82);
+    track.fillRect(centerX - 70, 1003, 140, 34);
+    track.fillTriangle(
+      centerX - 105,
+      1032,
+      centerX + 105,
+      1032,
+      centerX,
+      1094,
+    );
+    track.fillStyle(0xf2c968, 1);
+    track.fillRect(centerX - 58, 1003, 116, 30);
+    track.fillTriangle(
+      centerX - 91,
+      1028,
+      centerX + 91,
+      1028,
+      centerX,
+      1084,
+    );
+
     const logicalCheckpoints = [
       { x: centerX, y: 880 },
       { x: 2050, y: 820 },
@@ -2671,132 +2810,41 @@ class TrackInteriorScene extends BaseInteriorScene {
       .setScrollFactor(0)
       .setDepth(100);
 
-    this.createArenaSpeedHud();
-  }
-
-  createArenaSpeedHud() {
-    const panelX = 18;
-    const panelY = 18;
-    const panelWidth = 242;
-    const panelHeight = 70;
-
-    this.add
-      .rectangle(
-        panelX,
-        panelY,
-        panelWidth,
-        panelHeight,
-        0x142416,
-        0.9,
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(100)
-      .setStrokeStyle(2, 0xb7d878);
-
-    this.arenaGaitText = this.add
-      .text(panelX + 12, panelY + 9, "STANDING", {
+    this.lapTimerText = this.add
+      .text(942, 86, "LAP TIMER 00:00.000", {
         fontFamily: '"Courier New", monospace',
         fontSize: "13px",
         fontStyle: "bold",
-        color: GAITS.idle.color,
-        resolution: 2,
-      })
-      .setScrollFactor(0)
-      .setDepth(101);
-
-    this.arenaSpeedText = this.add
-      .text(panelX + panelWidth - 12, panelY + 9, "SPEED 0", {
-        fontFamily: '"Courier New", monospace',
-        fontSize: "13px",
-        fontStyle: "bold",
-        color: "#fff4bd",
+        color: "#f2c968",
+        backgroundColor: "#142416",
+        padding: { x: 7, y: 4 },
         resolution: 2,
       })
       .setOrigin(1, 0)
       .setScrollFactor(0)
-      .setDepth(101);
+      .setDepth(100);
 
-    this.arenaChargeText = this.add
-      .text(panelX + 12, panelY + 33, "HOLD SHIFT TO CANTER", {
+    this.exitMarker = this.add
+      .text(worldX(centerX), worldY(978), "▼  EXIT  ▼", {
         fontFamily: '"Courier New", monospace',
-        fontSize: "9px",
-        color: "#a9bd9a",
+        fontSize: "22px",
+        fontStyle: "bold",
+        color: "#fff0a8",
+        backgroundColor: "#8f2f2e",
+        padding: { x: 12, y: 6 },
         resolution: 2,
       })
-      .setScrollFactor(0)
-      .setDepth(101);
-
-    this.add
-      .rectangle(
-        panelX + 12,
-        panelY + 53,
-        panelWidth - 24,
-        7,
-        0x324735,
-        1,
-      )
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(101);
-
-    this.arenaSpeedBar = this.add
-      .rectangle(
-        panelX + 12,
-        panelY + 53,
-        panelWidth - 24,
-        7,
-        0xff8a5b,
-        1,
-      )
-      .setOrigin(0)
-      .setScale(0, 1)
-      .setScrollFactor(0)
-      .setDepth(102);
-
-    this.updateArenaSpeedHud();
-  }
-
-  updateArenaSpeedHud(delta = 0) {
-    if (!this.arenaGaitText) return;
-
-    const gait = GAITS[this.currentGait];
-    const currentSpeed = this.horse?.body?.velocity.length() ?? gait.speed;
-    const targetSpeedProgress = Phaser.Math.Clamp(
-      currentSpeed / GAITS.gallop.speed,
-      0,
-      1,
-    );
-    const blend =
-      delta > 0 ? 1 - Math.exp(-delta / 180) : 1;
-    const speedProgress = Phaser.Math.Linear(
-      this.arenaSpeedBar.scaleX,
-      targetSpeedProgress,
-      blend,
-    );
-    const gallopProgress = Phaser.Math.Clamp(
-      this.gallopCharge / GALLOP_CHARGE_MS,
-      0,
-      1,
-    );
-
-    this.arenaGaitText.setText(gait.label).setColor(gait.color);
-    this.arenaSpeedText.setText(`SPEED ${Math.round(currentSpeed)}`);
-    this.arenaSpeedBar.setScale(speedProgress, 1);
-
-    if (this.currentGait === "gallop") {
-      this.arenaChargeText
-        .setText("FULL GALLOP!")
-        .setColor(GAITS.gallop.color);
-    } else if (this.currentGait === "canter") {
-      this.arenaChargeText
-        .setText(`GALLOP CHARGE ${Math.floor(gallopProgress * 100)}%`)
-        .setColor(GAITS.canter.color);
-    } else {
-      this.arenaChargeText
-        .setText("HOLD SHIFT TO CANTER")
-        .setColor("#a9bd9a");
-    }
+      .setOrigin(0.5)
+      .setDepth(8);
+    this.tweens.add({
+      targets: this.exitMarker,
+      alpha: { from: 0.72, to: 1 },
+      scaleX: { from: 0.96, to: 1.04 },
+      scaleY: { from: 0.96, to: 1.04 },
+      duration: 650,
+      yoyo: true,
+      repeat: -1,
+    });
   }
 
   onFacilityEntered() {
@@ -2804,14 +2852,48 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.lapStartedAt = null;
     this.dustTimer = 0;
     this.trackStatus?.setText("CROSS THE STARTING LINE");
-    this.updateArenaSpeedHud();
+    this.updateLapTimer(0);
   }
 
-  getFacilityTitleLayout() {
-    return { x: 942, y: 18, originX: 1 };
+  shouldShowMinimap() {
+    return false;
+  }
+
+  getExitPromptText() {
+    return "E  EXIT TO MEADOW";
+  }
+
+  getExitPromptDistance() {
+    return 170;
+  }
+
+  formatLapTime(milliseconds) {
+    const elapsed = Math.max(0, Math.floor(milliseconds));
+    const minutes = Math.floor(elapsed / 60000);
+    const seconds = Math.floor((elapsed % 60000) / 1000);
+    const millis = elapsed % 1000;
+    const minuteText = String(minutes).padStart(2, "0");
+    const secondText = String(seconds).padStart(2, "0");
+    const millisText = String(millis).padStart(3, "0");
+    return `${minuteText}:${secondText}.${millisText}`;
+  }
+
+  updateLapTimer(time) {
+    if (!this.lapTimerText) return;
+    const elapsed =
+      this.lapStartedAt === null
+        ? 0
+        : Math.max(0, time - this.lapStartedAt);
+    this.lapTimerText.setText(
+      `LAP TIMER ${this.formatLapTime(elapsed)}`,
+    );
   }
 
   emitDust(direction, gait, delta) {
+    if (this.isJumping) {
+      this.dustTimer = 0;
+      return;
+    }
     this.dustTimer = emitHoofDust(this, direction, gait, delta, 18);
   }
 
@@ -2875,8 +2957,8 @@ class TrackInteriorScene extends BaseInteriorScene {
   }
 
   updateFacility(time, delta) {
-    this.updateArenaSpeedHud(delta);
     this.constrainHorseToCourse();
+    this.updateLapTimer(time);
     const checkpoint = this.checkpoints[this.nextCheckpoint];
     if (!checkpoint) return;
     if (
@@ -2892,6 +2974,7 @@ class TrackInteriorScene extends BaseInteriorScene {
 
     if (this.nextCheckpoint === 0) {
       this.lapStartedAt = time;
+      this.updateLapTimer(time);
     }
     this.nextCheckpoint += 1;
 
@@ -2925,6 +3008,7 @@ class TrackInteriorScene extends BaseInteriorScene {
     // Crossing the finish also starts the next lap for continuous racing.
     this.nextCheckpoint = 1;
     this.lapStartedAt = time;
+    this.updateLapTimer(time);
   }
 }
 
