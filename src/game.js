@@ -962,13 +962,10 @@ class MeadowScene extends ProgressScene {
       const interior = this.scene.get(facility.sceneKey);
       if (interior.sys.isSleeping()) {
         interior.prepareForEntry();
-        this.scene.wake(facility.sceneKey);
-      } else {
-        this.scene.launch(facility.sceneKey, {
-          facilityId: facility.id,
-        });
       }
-      this.scene.sleep();
+      this.scene.switch(facility.sceneKey, {
+        facilityId: facility.id,
+      });
     });
   }
 
@@ -2249,13 +2246,10 @@ class BaseInteriorScene extends ProgressScene {
       const meadow = this.scene.get("meadow");
       if (meadow.sys.isSleeping()) {
         meadow.prepareReturnFromFacility(this.facility);
-        this.scene.wake("meadow");
-        this.scene.sleep();
-      } else {
-        this.scene.start("meadow", {
-          returnFromFacility: this.facility.id,
-        });
       }
+      this.scene.switch("meadow", {
+        returnFromFacility: this.facility.id,
+      });
     });
   }
 
