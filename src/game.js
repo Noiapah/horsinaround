@@ -2025,8 +2025,9 @@ class BaseInteriorScene extends ProgressScene {
       .setDepth(40)
       .setVisible(false);
 
+    const titleLayout = this.getFacilityTitleLayout();
     this.add
-      .text(18, 18, this.facility.name, {
+      .text(titleLayout.x, titleLayout.y, this.facility.name, {
         fontFamily: '"Courier New", monospace',
         fontSize: "16px",
         fontStyle: "bold",
@@ -2035,6 +2036,7 @@ class BaseInteriorScene extends ProgressScene {
         padding: { x: 8, y: 5 },
         resolution: 2,
       })
+      .setOrigin(titleLayout.originX, 0)
       .setScrollFactor(0)
       .setDepth(100);
 
@@ -2335,6 +2337,10 @@ class BaseInteriorScene extends ProgressScene {
 
   buildInterior() {}
 
+  getFacilityTitleLayout() {
+    return { x: 18, y: 18, originX: 0 };
+  }
+
   onFacilityEntered() {}
 
   emitDust() {}
@@ -2624,13 +2630,22 @@ class TrackInteriorScene extends BaseInteriorScene {
       y: worldY(checkpoint.y),
     }));
 
-    // The infield is solid, forcing racers around the spina.
+    // Match collision to the visible spina and turning posts. A previous
+    // oversized rectangle extended into the lower racing lane at its corners.
     this.addCollisionRect(
       worldX(centerX),
       worldY(centerY),
-      worldX(1780),
-      worldY(330),
+      worldX(1520),
+      worldY(152),
     );
+    for (const postX of [centerX - 790, centerX + 790]) {
+      this.addCollisionRect(
+        worldX(postX),
+        worldY(centerY),
+        worldX(76),
+        worldY(76),
+      );
+    }
 
     this.add
       .text(worldX(centerX), worldY(centerY + 1), "SPQR", {
@@ -2644,7 +2659,7 @@ class TrackInteriorScene extends BaseInteriorScene {
       .setDepth(2);
 
     this.trackStatus = this.add
-      .text(18, 56, "CROSS THE STARTING LINE", {
+      .text(942, 54, "CROSS THE STARTING LINE", {
         fontFamily: '"Courier New", monospace',
         fontSize: "12px",
         color: "#fff4bd",
@@ -2652,6 +2667,7 @@ class TrackInteriorScene extends BaseInteriorScene {
         padding: { x: 7, y: 4 },
         resolution: 2,
       })
+      .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(100);
 
@@ -2659,7 +2675,7 @@ class TrackInteriorScene extends BaseInteriorScene {
   }
 
   createArenaSpeedHud() {
-    const panelX = 700;
+    const panelX = 18;
     const panelY = 18;
     const panelWidth = 242;
     const panelHeight = 70;
@@ -2741,14 +2757,22 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.updateArenaSpeedHud();
   }
 
-  updateArenaSpeedHud() {
+  updateArenaSpeedHud(delta = 0) {
     if (!this.arenaGaitText) return;
 
     const gait = GAITS[this.currentGait];
-    const speedProgress = Phaser.Math.Clamp(
-      gait.speed / GAITS.gallop.speed,
+    const currentSpeed = this.horse?.body?.velocity.length() ?? gait.speed;
+    const targetSpeedProgress = Phaser.Math.Clamp(
+      currentSpeed / GAITS.gallop.speed,
       0,
       1,
+    );
+    const blend =
+      delta > 0 ? 1 - Math.exp(-delta / 180) : 1;
+    const speedProgress = Phaser.Math.Linear(
+      this.arenaSpeedBar.scaleX,
+      targetSpeedProgress,
+      blend,
     );
     const gallopProgress = Phaser.Math.Clamp(
       this.gallopCharge / GALLOP_CHARGE_MS,
@@ -2757,7 +2781,7 @@ class TrackInteriorScene extends BaseInteriorScene {
     );
 
     this.arenaGaitText.setText(gait.label).setColor(gait.color);
-    this.arenaSpeedText.setText(`SPEED ${gait.speed}`);
+    this.arenaSpeedText.setText(`SPEED ${Math.round(currentSpeed)}`);
     this.arenaSpeedBar.setScale(speedProgress, 1);
 
     if (this.currentGait === "gallop") {
@@ -2781,6 +2805,10 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.dustTimer = 0;
     this.trackStatus?.setText("CROSS THE STARTING LINE");
     this.updateArenaSpeedHud();
+  }
+
+  getFacilityTitleLayout() {
+    return { x: 942, y: 18, originX: 1 };
   }
 
   emitDust(direction, gait, delta) {
@@ -2846,8 +2874,8 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.horseShadow.setPosition(constrainedX, constrainedY + 31);
   }
 
-  updateFacility(time) {
-    this.updateArenaSpeedHud();
+  updateFacility(time, delta) {
+    this.updateArenaSpeedHud(delta);
     this.constrainHorseToCourse();
     const checkpoint = this.checkpoints[this.nextCheckpoint];
     if (!checkpoint) return;
