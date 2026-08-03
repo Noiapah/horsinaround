@@ -1,117 +1,190 @@
 # Horsin' Around
 
-The first local prototype for **horsinaround.io**: a top-down 8-bit meadow
-where a horse can move in eight directions across an 8000 × 6000 field.
+**Horsin' Around** is a local prototype for **horsinaround.io**, built with
+[Phaser](https://phaser.io/). It is a top-down, single-player horse game with
+8-bit artwork, eight-direction movement, jumping, speed-based obstacle damage,
+enterable facilities, local progress saving, and a timed Circus Maximus
+racetrack.
 
-## Run locally
+The project currently runs entirely in the browser. Phaser 3.90.0 and all game
+assets are included in the repository, so there is no package installation or
+external asset download.
 
-From PowerShell:
+## Quick start
+
+From PowerShell in the project directory:
 
 ```powershell
 ./server.ps1
 ```
 
-Then open <http://localhost:8080>.
+Open <http://localhost:8080> in a browser. To use another port:
 
-`server.ps1` is a locked-down local development server bound to loopback. Use
-the generated static release with a production web server or CDN when
-publishing the game; do not expose the PowerShell server to the internet.
+```powershell
+./server.ps1 -Port 3000
+```
 
-Use **WASD** to move. Diagonal movement is normalized to the same speed as
-horizontal and vertical movement.
+Press `Ctrl+C` in the terminal to stop the server.
 
-- Hold **V** to walk slowly.
-- Move without a modifier to trot.
-- Hold **Shift** to canter.
-- Keep moving with **Shift** held for 4.5 seconds to enter a full gallop.
-- Press **Space** to jump over puddles and fences.
-- Press **E** at a marked doorway to enter or leave a facility.
+The included server is a loopback-only development server. It intentionally
+serves only the game's approved static files and should not be exposed directly
+to the internet.
 
-The same walk, trot, canter, and charged-gallop speeds apply inside facilities,
-including the Circus Maximus.
+## Controls
 
-Each direction has one standing image and a four-frame leg cycle (forward,
-down, backward, recovery). The cycle runs faster for each faster gait. The
-east/west profiles keep the visible eye, and the faster gaits kick up dust over
-an animated ground shadow.
+The controls and horse HUD are shared across the meadow, stable, hospital, and
+racetrack.
 
-The horse has three hearts and the meadow contains colorful flower patches,
-solid fences, and puddles.
-V-walking into an obstacle is safe; hitting one at a trot costs one heart,
-at a canter costs two, and at a gallop costs all three. Losing every heart
-returns the horse to the starting position with three restored hearts.
-Obstacle collision and damage are disabled while the horse is airborne.
+| Input | Action |
+| --- | --- |
+| **WASD** | Move in eight directions |
+| **V** | Hold while moving to walk |
+| **Shift** | Hold while moving to canter and charge a gallop |
+| **Space** | Jump over eligible obstacles |
+| **E** | Enter or leave a nearby facility |
 
-The bottom-right local map keeps the horse centered, plots nearby puddles and
-fences, and uses distinct pixel icons for the stable, hospital, and trotting
-track. Facility markers remain on the map edge when their destination is farther
-away.
+Diagonal movement is normalized, so it is not faster than horizontal or
+vertical movement.
 
-## Facilities
+### Gaits and obstacle damage
 
-Three authored structures are placed in the meadow:
+| Gait | How to use it | Speed | Hearts lost on impact |
+| --- | --- | ---: | ---: |
+| Walk | Hold **V** while moving | 110 | 0 |
+| Trot | Move without a speed modifier | 240 | 1 |
+| Canter | Hold **Shift** while moving | 345 | 2 |
+| Gallop | Keep cantering for 4.5 seconds | 470 | 3 |
 
-- **Meadow Stable** — an enterable stall and feed-room interior.
-- **Horse Hospital** — entering restores all three hearts.
-- **Circus Maximus** — a long Roman-inspired oval with stone stands, a central
-  spina, a checkpointed racing line, and a saved personal best.
+The horse has three hearts. Puddles and fences block the horse in the meadow,
+but they do not cause damage during a slow walk or while the horse is airborne.
+Losing all hearts returns the horse to the starting position and restores all
+three hearts.
+
+Each of the eight directions has one idle frame and a four-frame movement cycle.
+Animation speed increases with the gait, the side profiles show the horse's
+eye, and cantering and galloping produce hoof-dust effects.
+
+## HUD and minimap
+
+The compact top-left HUD shows:
+
+- Three heart icons.
+- The current gait.
+- The horse's current speed.
+- A progressive speed bar.
+- Gallop charge while cantering.
+
+The bottom-right minimap is visible in the meadow, stable, and hospital. It
+keeps the horse or current facility centered, plots nearby puddles and fences,
+and uses distinct markers for each facility. Distant facility markers are
+clamped to the map edge.
+
+The minimap is intentionally hidden inside the Circus Maximus so the race view
+stays uncluttered. Race status and the live lap timer appear in the top-right
+corner instead.
+
+## World and facilities
+
+The meadow is an 8000 × 6000 world containing deterministic grass details,
+flower patches, puddles, fences, and three enterable structures:
+
+- **Meadow Stable** — an authored stall and feed-room interior.
+- **Horse Hospital** — restores all three hearts when entered.
+- **Circus Maximus** — a large Roman-inspired oval with stone stands, a central
+  spina, turning posts, checkpoint markers, and a visible exit gate.
+
+All facilities use the same movement, gait, jump, interaction, and HUD systems
+as the meadow. Ordinary interior obstacles can be jumped, while boundary walls
+remain solid.
+
+### Circus Maximus laps
+
+Cross the checkered starting line and follow the checkpoint route around the
+arena. The live timer:
+
+- Starts when the first lap begins.
+- Displays elapsed time as `MM:SS.mmm`.
+- Saves a personal best in browser progress.
+- Resets at the finish line and immediately times the next continuous lap.
+
+The arena exit is marked by a bright ground arrow and animated **EXIT** sign.
+Move near it and press **E** to return to the meadow.
 
 Each facility is a separate Phaser scene. Its graphics and collision layout are
-created on the first visit, then the scene sleeps and is reused on later visits.
-The meadow also sleeps while the horse is indoors, so leaving a facility returns
-to the existing world and its already-loaded chunks instead of rebuilding it.
+created on the first visit, then the scene sleeps and is reused. The meadow also
+sleeps while the horse is indoors, so returning does not rebuild the world or
+its loaded chunks.
 
 ## Progress and world streaming
 
-Browser progress uses a versioned serializable model containing lives, current
-location, facility position, save revision, and track records. The older
-position-only save format is migrated automatically. Progress is saved every
-five seconds, during transitions, and when the page closes. A short-lived
-browser-tab lease prevents two open copies of the game from overwriting one
-another; the active tab keeps the lease and best-time records are merged when
-ownership changes.
+Progress is stored in browser `localStorage` using a versioned, serializable
+model containing:
 
-Loaded meadow and interior positions are checked against boundaries and solid
-colliders. Unsafe positions search outward on a 64-pixel grid before falling
-back to a known entrance.
+- Remaining lives.
+- Current world or facility location.
+- Validated horse position.
+- Save revision and timestamp.
+- Racetrack records.
 
-Grass details and flower patches are generated in deterministic 1024 × 1024
-chunks. Only the player’s current chunk and its neighbors remain active, so the
-meadow can gain more landmarks without generating every decoration at boot.
-New chunks are queued by distance and limited to one per frame to avoid a
-noticeable frame-time spike when the horse crosses a chunk boundary.
+Older position-only saves are migrated automatically. Progress is saved every
+five seconds, during scene transitions, and when the page closes. A short-lived
+tab lease prevents two open copies from overwriting each other, and best-time
+records are merged when save ownership changes.
 
-## Development checks and releases
+Loaded meadow and facility positions are validated against boundaries and solid
+colliders. If a saved position is unsafe after a map update, the game searches
+outward on a 64-pixel grid for a safe replacement.
 
-Run the portable asset and server checks with:
+Meadow decoration is generated in deterministic 1024 × 1024 chunks. Only the
+horse's current chunk and its neighbors remain active. New chunks are ordered by
+distance and limited to one per frame, which keeps first load and traversal
+responsive as the map expands.
+
+## Development
+
+Run the portable server and asset checks:
 
 ```powershell
 ./scripts/test-project.ps1
 ```
 
-Rebuild the 40 horse animation frames from the checked-in source sheets with:
+Rebuild all 40 runtime animation frames from the checked-in source sheets:
 
 ```powershell
 ./scripts/build-animation-assets.ps1 -Force
 ```
 
-Create a lean static release in `dist/` with:
+Build the static production bundle:
 
 ```powershell
 ./scripts/build-release.ps1
 ```
 
-The release contains only the game code, Phaser, and the 40 runtime horse
-frames. Source artwork and animation working files remain in the repository but
-are excluded from deployment.
+The release is written to `dist/` and contains only the HTML, CSS, game code,
+pinned Phaser runtime, and 40 runtime horse frames. Source artwork and animation
+working files are excluded.
+
+## Deployment and current limitations
+
+The generated `dist/` directory can be hosted by any static web server or CDN.
+For AWS, a typical first deployment would use a private S3 bucket behind
+CloudFront with HTTPS and the future domain pointed at the distribution.
+
+The current game is single-player and has no application server, user accounts,
+or shared profile database. Progress belongs to one browser installation and
+does not synchronize across devices. Online profiles and server-backed progress
+will require an authenticated API and persistent database in a later phase.
 
 ## Project layout
 
-- `src/game.js` — Phaser scene, controls, camera, and meadow
-- `src/styles.css` — full-window game presentation
-- `public/assets/horse/animation/` — five PNG frames for each of eight directions
-- `public/assets/horse/animation-preview.png` — all idle and movement frames
-- `scripts/build-animation-assets.ps1` — reproducible sprite-sheet converter
-- `scripts/test-project.ps1` — server and runtime-asset validation
-- `scripts/build-release.ps1` — lean static deployment packager
-- `vendor/phaser.min.js` — locally pinned Phaser runtime
+- `index.html` — browser entry point.
+- `src/game.js` — gameplay, progress model, world generation, and Phaser scenes.
+- `src/styles.css` — full-window game presentation.
+- `server.ps1` — restricted loopback development server.
+- `public/assets/horse/animation/` — five PNG frames for each direction.
+- `public/assets/horse/source/` — checked-in animation source sheets.
+- `public/assets/horse/animation-preview.png` — complete animation preview.
+- `scripts/build-animation-assets.ps1` — sprite-sheet converter.
+- `scripts/test-project.ps1` — server and runtime-asset validation.
+- `scripts/build-release.ps1` — static deployment packager.
+- `vendor/phaser.min.js` — pinned local Phaser runtime.
