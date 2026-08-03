@@ -750,17 +750,6 @@ class ProgressScene extends Phaser.Scene {
 
     const gait = GAITS[this.currentGait] ?? GAITS.idle;
     const currentSpeed = this.horse?.body?.velocity.length() ?? 0;
-    const targetSpeedProgress = Phaser.Math.Clamp(
-      currentSpeed / GAITS.gallop.speed,
-      0,
-      1,
-    );
-    const blend = delta > 0 ? 1 - Math.exp(-delta / 180) : 1;
-    const speedProgress = Phaser.Math.Linear(
-      speedBar.scaleX,
-      targetSpeedProgress,
-      blend,
-    );
     const gallopProgress = Phaser.Math.Clamp(
       this.gallopCharge / GALLOP_CHARGE_MS,
       0,
@@ -769,7 +758,7 @@ class ProgressScene extends Phaser.Scene {
 
     gaitText.setText(`GAIT: ${gait.label}`).setColor(gait.color);
     speedText.setText(`SPEED ${Math.round(currentSpeed)}`);
-    speedBar.setScale(speedProgress, 1);
+    speedBar.setScale(gallopProgress, 1);
 
     if (this.currentGait === "gallop") {
       chargeText

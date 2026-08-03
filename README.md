@@ -71,8 +71,8 @@ The compact top-left HUD shows:
 - Three heart icons.
 - The current gait.
 - The horse's current speed.
-- A progressive speed bar.
-- Gallop charge while cantering.
+- A gallop-charge bar that fills linearly during the 4.5-second canter.
+- Gallop-charge percentage while cantering.
 
 The bottom-right minimap is visible in the meadow, stable, and hospital. It
 keeps the horse or current facility centered, plots nearby puddles and fences,
