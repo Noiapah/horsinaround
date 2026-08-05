@@ -4,7 +4,7 @@
 [Phaser](https://phaser.io/). It is a top-down, single-player horse game with
 8-bit artwork, eight-direction movement, jumping, speed-based obstacle damage,
 enterable facilities, local progress saving, and a timed Circus Maximus
-racetrack.
+racetrack with collectible coins.
 
 The project currently runs entirely in the browser. Phaser 3.90.0 and all game
 assets are included in the repository, so there is no package installation or
@@ -73,6 +73,7 @@ The compact top-left HUD shows:
 - The horse's current speed.
 - A gallop-charge bar that fills linearly during the 4.5-second canter.
 - Gallop-charge percentage while cantering.
+- The persistent coin-account balance.
 
 The bottom-right minimap is visible in the meadow, stable, and hospital. It
 keeps the horse or current facility centered, plots nearby puddles and fences,
@@ -107,6 +108,10 @@ arena. The live timer:
 - Saves a personal best in browser progress.
 - Resets at the finish line and immediately times the next continuous lap.
 
+Twelve pixel coins are placed between the ordered race checkpoints. Each coin
+adds one coin to the persistent account and disappears when collected. The set
+respawns after a valid completed lap and whenever the arena is entered again.
+
 The arena exit is marked by a bright ground arrow and animated **EXIT** sign.
 Move near it and press **E** to return to the meadow.
 
@@ -123,6 +128,7 @@ model containing:
 - Remaining lives.
 - Current world or facility location.
 - Validated horse position.
+- Coin-account balance.
 - Save revision and timestamp.
 - Racetrack records.
 

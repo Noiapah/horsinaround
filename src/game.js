@@ -4,7 +4,7 @@ const START_X = WORLD_WIDTH / 2;
 const START_Y = WORLD_HEIGHT / 2;
 const MAX_LIVES = 3;
 const WORLD_VERSION = 2;
-const PROGRESS_SCHEMA_VERSION = 2;
+const PROGRESS_SCHEMA_VERSION = 3;
 const PROGRESS_STORAGE_KEY = "horsin-around-progress";
 const PROGRESS_LEASE_KEY = `${PROGRESS_STORAGE_KEY}:lease`;
 const PROGRESS_LEASE_MS = 12000;
@@ -25,6 +25,7 @@ const TRACK_SCALE_X = 2;
 const TRACK_SCALE_Y = 1.5;
 const TRACK_WIDTH = TRACK_LOGICAL_WIDTH * TRACK_SCALE_X;
 const TRACK_HEIGHT = TRACK_LOGICAL_HEIGHT * TRACK_SCALE_Y;
+const TRACK_COIN_VALUE = 1;
 const GAIT_DAMAGE = {
   idle: 0,
   walk: 0,
@@ -269,6 +270,29 @@ function ensureHeartTextures(scene) {
   createHeart("heart-empty", 0x5d4b4b);
 }
 
+function ensureTrackCoinTexture(scene) {
+  if (scene.textures.exists("track-coin")) return;
+
+  const coin = scene.make.graphics({ x: 0, y: 0, add: false });
+  coin.fillStyle(0x6b3e15);
+  coin.fillRect(4, 0, 8, 2);
+  coin.fillRect(2, 2, 12, 2);
+  coin.fillRect(0, 4, 16, 8);
+  coin.fillRect(2, 12, 12, 2);
+  coin.fillRect(4, 14, 8, 2);
+  coin.fillStyle(0xf2c43d);
+  coin.fillRect(4, 2, 8, 2);
+  coin.fillRect(2, 4, 12, 8);
+  coin.fillRect(4, 12, 8, 2);
+  coin.fillStyle(0xfff0a8);
+  coin.fillRect(4, 4, 3, 6);
+  coin.fillRect(7, 4, 3, 2);
+  coin.fillStyle(0xd78a21);
+  coin.fillRect(10, 6, 2, 6);
+  coin.generateTexture("track-coin", 16, 16);
+  coin.destroy();
+}
+
 const FACILITIES = [
   {
     id: "stable-main",
@@ -317,12 +341,19 @@ const INTERIOR_SCENE_BY_FACILITY = new Map(
   FACILITIES.map((facility) => [facility.id, facility.sceneKey]),
 );
 
+function normalizeCoinBalance(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return 0;
+  return Math.min(Math.floor(numericValue), Number.MAX_SAFE_INTEGER);
+}
+
 class HorseProgress {
   constructor({
     schemaVersion = PROGRESS_SCHEMA_VERSION,
     worldVersion = WORLD_VERSION,
     revision = 0,
     lives = MAX_LIVES,
+    coins = 0,
     location = {
       type: "world",
       id: "meadow",
@@ -336,6 +367,7 @@ class HorseProgress {
     this.worldVersion = worldVersion;
     this.revision = revision;
     this.lives = lives;
+    this.coins = normalizeCoinBalance(coins);
     this.location = {
       type: location.type,
       id: location.id,
@@ -391,6 +423,7 @@ class HorseProgress {
         Number.isInteger(savedLives) && savedLives > 0
           ? Math.min(savedLives, MAX_LIVES)
           : MAX_LIVES,
+      coins: normalizeCoinBalance(value.coins),
       location: {
         type: locationType,
         id: locationType === "interior" ? sourceLocation.id : "meadow",
@@ -410,6 +443,15 @@ class HorseProgress {
       updatedAt:
         typeof value.updatedAt === "string" ? value.updatedAt : null,
     });
+  }
+
+  earnCoins(amount = 1) {
+    const earnings = normalizeCoinBalance(amount);
+    this.coins = Math.min(
+      this.coins + earnings,
+      Number.MAX_SAFE_INTEGER,
+    );
+    return this.coins;
   }
 
   setLocation(type, id, x, y, entranceId = null) {
@@ -435,6 +477,7 @@ class HorseProgress {
       worldVersion: this.worldVersion,
       revision: this.revision,
       lives: this.lives,
+      coins: this.coins,
       location: {
         ...this.location,
         position: { ...this.location.position },
@@ -564,6 +607,10 @@ class LocalProgressStore {
           progress.records = mergeProgressRecords(
             progress.records,
             storedProgress.records,
+          );
+          progress.coins = Math.max(
+            progress.coins,
+            storedProgress.coins,
           );
         } catch {
           console.warn("Replacing invalid saved progress.");
@@ -716,12 +763,25 @@ class ProgressScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(101);
 
+    const accountText = this.add
+      .text(panelX + panelWidth - 16, panelY + 91, "COINS: 0", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "9px",
+        fontStyle: "bold",
+        color: "#f2c968",
+        resolution: 2,
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(101);
+
     this.horseHud = {
       heartIcons,
       gaitText,
       speedText,
       speedBar,
       chargeText,
+      accountText,
     };
     if (this.minimapEnabled) {
       this.createMinimap(offsetX, offsetY);
@@ -741,6 +801,7 @@ class ProgressScene extends Phaser.Scene {
       speedText,
       speedBar,
       chargeText,
+      accountText,
     } = this.horseHud;
     for (let i = 0; i < heartIcons.length; i += 1) {
       heartIcons[i].setTexture(
@@ -759,6 +820,7 @@ class ProgressScene extends Phaser.Scene {
     gaitText.setText(`GAIT: ${gait.label}`).setColor(gait.color);
     speedText.setText(`SPEED ${Math.round(currentSpeed)}`);
     speedBar.setScale(gallopProgress, 1);
+    accountText.setText(`COINS: ${this.progress.coins}`);
 
     if (this.currentGait === "gallop") {
       chargeText
@@ -2577,6 +2639,8 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.trackStatus = null;
     this.lapTimerText = null;
     this.exitMarker = null;
+    this.trackCoins = null;
+    this.coinOverlap = null;
   }
 
   buildInterior() {
@@ -2757,6 +2821,7 @@ class TrackInteriorScene extends BaseInteriorScene {
       x: worldX(checkpoint.x),
       y: worldY(checkpoint.y),
     }));
+    this.createTrackCoins(logicalCheckpoints);
 
     // Match collision to the visible spina and turning posts. A previous
     // oversized rectangle extended into the lower racing lane at its corners.
@@ -2836,12 +2901,92 @@ class TrackInteriorScene extends BaseInteriorScene {
     });
   }
 
+  createTrackCoins(logicalCheckpoints) {
+    ensureTrackCoinTexture(this);
+    this.trackCoins = this.physics.add.staticGroup();
+
+    logicalCheckpoints.slice(0, -1).forEach((position, index) => {
+      const nextPosition = logicalCheckpoints[index + 1];
+      const x = ((position.x + nextPosition.x) / 2) * TRACK_SCALE_X;
+      const y = ((position.y + nextPosition.y) / 2) * TRACK_SCALE_Y;
+      this.trackCoins
+        .create(x, y, "track-coin")
+        .setScale(1.5)
+        .setDepth(14)
+        .setData("spawnX", x)
+        .setData("spawnY", y)
+        .refreshBody();
+    });
+    this.tweens.add({
+      targets: this.trackCoins.getChildren(),
+      alpha: { from: 0.68, to: 1 },
+      duration: 520,
+      yoyo: true,
+      repeat: -1,
+    });
+  }
+
+  resetTrackCoins() {
+    for (const coin of this.trackCoins?.getChildren() ?? []) {
+      coin
+        .enableBody(
+          true,
+          coin.getData("spawnX"),
+          coin.getData("spawnY"),
+          true,
+          true,
+        )
+        .refreshBody();
+    }
+  }
+
+  collectTrackCoin(horse, coin) {
+    if (!coin.active) return;
+    const pickupX = coin.x;
+    const pickupY = coin.y;
+    coin.disableBody(true, true);
+    this.progress.earnCoins(TRACK_COIN_VALUE);
+    this.updateHorseHud();
+    this.progressStore.save(this.progress);
+
+    const notice = this.add
+      .text(pickupX, pickupY - 22, "+1 COIN", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#fff0a8",
+        backgroundColor: "#6b3e15",
+        padding: { x: 5, y: 3 },
+        resolution: 2,
+      })
+      .setOrigin(0.5)
+      .setDepth(30);
+    this.tweens.add({
+      targets: notice,
+      y: notice.y - 28,
+      alpha: 0,
+      duration: 650,
+      ease: "Quad.easeOut",
+      onComplete: () => notice.destroy(),
+    });
+  }
+
   onFacilityEntered() {
     this.nextCheckpoint = 0;
     this.lapStartedAt = null;
     this.dustTimer = 0;
     this.trackStatus?.setText("CROSS THE STARTING LINE");
     this.updateLapTimer(0);
+    this.resetTrackCoins();
+    if (!this.coinOverlap?.active) {
+      this.coinOverlap = this.physics.add.overlap(
+        this.horse,
+        this.trackCoins,
+        this.collectTrackCoin,
+        undefined,
+        this,
+      );
+    }
   }
 
   shouldShowMinimap() {
@@ -2998,6 +3143,7 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.nextCheckpoint = 1;
     this.lapStartedAt = time;
     this.updateLapTimer(time);
+    this.resetTrackCoins();
   }
 }
 
