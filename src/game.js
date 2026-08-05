@@ -26,6 +26,7 @@ const TRACK_SCALE_Y = 1.5;
 const TRACK_WIDTH = TRACK_LOGICAL_WIDTH * TRACK_SCALE_X;
 const TRACK_HEIGHT = TRACK_LOGICAL_HEIGHT * TRACK_SCALE_Y;
 const TRACK_COIN_VALUE = 1;
+const HOSPITAL_HEALING_COST = 20;
 const GAIT_DAMAGE = {
   idle: 0,
   walk: 0,
@@ -454,6 +455,19 @@ class HorseProgress {
     return this.coins;
   }
 
+  spendCoins(amount) {
+    const cost = Number(amount);
+    if (
+      !Number.isSafeInteger(cost) ||
+      cost <= 0 ||
+      this.coins < cost
+    ) {
+      return false;
+    }
+    this.coins -= cost;
+    return true;
+  }
+
   setLocation(type, id, x, y, entranceId = null) {
     this.location = {
       type,
@@ -506,6 +520,23 @@ function mergeProgressRecords(localRecords = {}, storedRecords = {}) {
     }
   }
   return merged;
+}
+
+function reconcileStoredProgress(progress, storedProgress) {
+  const storedIsNewer = storedProgress.revision > progress.revision;
+  if (storedIsNewer) {
+    // A newer lease owner may have spent coins. Never resurrect that stale
+    // balance when this tab later takes over saving.
+    progress.coins = storedProgress.coins;
+  }
+  progress.revision = Math.max(
+    progress.revision,
+    storedProgress.revision,
+  );
+  progress.records = mergeProgressRecords(
+    progress.records,
+    storedProgress.records,
+  );
 }
 
 class LocalProgressStore {
@@ -588,35 +619,87 @@ class LocalProgressStore {
     }
   }
 
+  reconcileFromStorage(progress) {
+    const storedValue = window.localStorage.getItem(
+      PROGRESS_STORAGE_KEY,
+    );
+    if (!storedValue) return;
+    try {
+      const storedProgress = HorseProgress.fromJSON(
+        JSON.parse(storedValue),
+      );
+      reconcileStoredProgress(progress, storedProgress);
+    } catch {
+      console.warn("Replacing invalid saved progress.");
+    }
+  }
+
+  commitEconomyMutation(progress, applyMutation) {
+    let rollbackState = null;
+    try {
+      if (!this.tryAcquireLease()) {
+        return { status: "unavailable", balance: progress.coins };
+      }
+      this.reconcileFromStorage(progress);
+      rollbackState = progress.toJSON();
+      const outcome = applyMutation();
+      if (!outcome.changed) {
+        return { status: outcome.status, balance: progress.coins };
+      }
+      progress.markSaved();
+      window.localStorage.setItem(
+        PROGRESS_STORAGE_KEY,
+        JSON.stringify(progress),
+      );
+      return { status: outcome.status, balance: progress.coins };
+    } catch (error) {
+      if (rollbackState) {
+        Object.assign(
+          progress,
+          HorseProgress.fromJSON(rollbackState),
+        );
+      }
+      this.releaseLease();
+      console.warn("Could not save coin transaction.", error);
+      return { status: "unavailable", balance: progress.coins };
+    }
+  }
+
+  commitCoinEarning(progress, amount) {
+    const earnings = Number(amount);
+    if (!Number.isSafeInteger(earnings) || earnings <= 0) {
+      return { status: "invalid", balance: progress.coins };
+    }
+    return this.commitEconomyMutation(progress, () => {
+      progress.earnCoins(earnings);
+      return { status: "earned", changed: true };
+    });
+  }
+
+  commitCoinPurchase(progress, amount, applyPurchase) {
+    const cost = Number(amount);
+    if (
+      !Number.isSafeInteger(cost) ||
+      cost <= 0 ||
+      typeof applyPurchase !== "function"
+    ) {
+      return { status: "invalid", balance: progress.coins };
+    }
+    return this.commitEconomyMutation(progress, () => {
+      if (!progress.spendCoins(cost)) {
+        return { status: "insufficient", changed: false };
+      }
+      applyPurchase();
+      return { status: "purchased", changed: true };
+    });
+  }
+
   save(progress) {
+    let rollbackState = null;
     try {
       if (!this.tryAcquireLease()) return false;
-
-      const storedValue = window.localStorage.getItem(
-        PROGRESS_STORAGE_KEY,
-      );
-      if (storedValue) {
-        try {
-          const storedProgress = HorseProgress.fromJSON(
-            JSON.parse(storedValue),
-          );
-          progress.revision = Math.max(
-            progress.revision,
-            storedProgress.revision,
-          );
-          progress.records = mergeProgressRecords(
-            progress.records,
-            storedProgress.records,
-          );
-          progress.coins = Math.max(
-            progress.coins,
-            storedProgress.coins,
-          );
-        } catch {
-          console.warn("Replacing invalid saved progress.");
-        }
-      }
-
+      rollbackState = progress.toJSON();
+      this.reconcileFromStorage(progress);
       progress.markSaved();
       window.localStorage.setItem(
         PROGRESS_STORAGE_KEY,
@@ -624,6 +707,13 @@ class LocalProgressStore {
       );
       return true;
     } catch (error) {
+      if (rollbackState) {
+        Object.assign(
+          progress,
+          HorseProgress.fromJSON(rollbackState),
+        );
+      }
+      this.releaseLease();
       console.warn("Could not save progress.", error);
       return false;
     }
@@ -1482,8 +1572,12 @@ class MeadowScene extends ProgressScene {
 
     this.nearbyFacility = closest;
     if (closest) {
+      const serviceDetails =
+        closest.type === "hospital"
+          ? ` - HEAL ${HOSPITAL_HEALING_COST} COINS`
+          : "";
       this.entrancePrompt
-        .setText(`E  ENTER ${closest.name}`)
+        .setText(`E  ENTER ${closest.name}${serviceDetails}`)
         .setPosition(closest.entrance.x, closest.entrance.y - 52)
         .setVisible(true);
     } else {
@@ -2197,9 +2291,11 @@ class BaseInteriorScene extends ProgressScene {
     this.cameras.main.fadeIn(220, 20, 36, 22);
 
     this.createHorseHud(0, 0, this.shouldShowMinimap());
-    this.onFacilityEntered();
+    const entryProgressSaved = this.onFacilityEntered() === true;
     this.updateHorseHud();
-    this.progressStore.save(this.progress);
+    if (!entryProgressSaved) {
+      this.progressStore.save(this.progress);
+    }
     this.installPageSave(() => ({
       type: "interior",
       id: this.facility.id,
@@ -2237,9 +2333,11 @@ class BaseInteriorScene extends ProgressScene {
     this.exitPrompt.setVisible(false);
     this.resetHorseControls();
     this.isTransitioning = false;
-    this.onFacilityEntered();
+    const entryProgressSaved = this.onFacilityEntered() === true;
     this.updateHorseHud();
-    this.progressStore.save(this.progress);
+    if (!entryProgressSaved) {
+      this.progressStore.save(this.progress);
+    }
     this.cameras.main.fadeIn(180, 20, 36, 22);
   }
 
@@ -2511,7 +2609,10 @@ class BaseInteriorScene extends ProgressScene {
     return { x: 942, y: 18, originX: 1 };
   }
 
-  onFacilityEntered() {}
+  // Return true when the entry hook has already saved progress atomically.
+  onFacilityEntered() {
+    return false;
+  }
 
   emitDust() {}
 
@@ -2606,27 +2707,56 @@ class HospitalInteriorScene extends BaseInteriorScene {
   }
 
   onFacilityEntered() {
-    const wasHurt = this.progress.lives < MAX_LIVES;
-    this.progress.lives = MAX_LIVES;
-    this.progressStore.save(this.progress);
+    const needsHealing = this.progress.lives < MAX_LIVES;
+    let message = "YOUR HORSE IS HEALTHY!\nNO CHARGE";
+    let messageColor = "#d9efb0";
+    let backgroundColor = "#29433a";
+    let entryProgressSaved = false;
+
+    if (needsHealing) {
+      const purchase = this.progressStore.commitCoinPurchase(
+        this.progress,
+        HOSPITAL_HEALING_COST,
+        () => {
+          this.progress.lives = MAX_LIVES;
+        },
+      );
+      if (purchase.status === "purchased") {
+        entryProgressSaved = true;
+        message = `ALL HEARTS RESTORED!\n-${HOSPITAL_HEALING_COST} COINS`;
+      } else if (purchase.status === "insufficient") {
+        const shortfall = HOSPITAL_HEALING_COST - purchase.balance;
+        message = `HEALING COSTS ${HOSPITAL_HEALING_COST} COINS\nNEED ${shortfall} MORE`;
+        messageColor = "#fff0a8";
+        backgroundColor = "#713b34";
+      } else {
+        message = "HEALING UNAVAILABLE\nLEAVE AND TRY AGAIN";
+        messageColor = "#fff0a8";
+        backgroundColor = "#713b34";
+      }
+    }
+
+    this.updateHorseHud();
     this.serviceMessage?.destroy();
     this.serviceMessage = this.add
       .text(
         this.interiorWidth / 2,
         330,
-        wasHurt ? "ALL HEARTS RESTORED!" : "YOUR HORSE IS HEALTHY!",
+        message,
         {
           fontFamily: '"Courier New", monospace',
           fontSize: "15px",
           fontStyle: "bold",
-          color: "#d9efb0",
-          backgroundColor: "#29433a",
+          align: "center",
+          color: messageColor,
+          backgroundColor,
           padding: { x: 8, y: 5 },
           resolution: 2,
         },
       )
       .setOrigin(0.5)
       .setDepth(50);
+    return entryProgressSaved;
   }
 }
 
@@ -2915,6 +3045,7 @@ class TrackInteriorScene extends BaseInteriorScene {
         .setDepth(14)
         .setData("spawnX", x)
         .setData("spawnY", y)
+        .setData("retryAfter", 0)
         .refreshBody();
     });
     this.tweens.add({
@@ -2936,26 +3067,56 @@ class TrackInteriorScene extends BaseInteriorScene {
           true,
           true,
         )
+        .setData("retryAfter", 0)
         .refreshBody();
     }
   }
 
   collectTrackCoin(horse, coin) {
-    if (!coin.active) return;
+    if (
+      !coin.active ||
+      this.time.now < (coin.getData("retryAfter") ?? 0)
+    ) {
+      return;
+    }
     const pickupX = coin.x;
     const pickupY = coin.y;
-    coin.disableBody(true, true);
-    this.progress.earnCoins(TRACK_COIN_VALUE);
-    this.updateHorseHud();
-    this.progressStore.save(this.progress);
+    const earning = this.progressStore.commitCoinEarning(
+      this.progress,
+      TRACK_COIN_VALUE,
+    );
+    if (earning.status !== "earned") {
+      coin.setData("retryAfter", this.time.now + 1000);
+      this.updateHorseHud();
+      this.showTrackCoinNotice(
+        pickupX,
+        pickupY,
+        "ACCOUNT BUSY",
+        "#fff0a8",
+        "#713b34",
+      );
+      return;
+    }
 
+    coin.disableBody(true, true);
+    this.updateHorseHud();
+    this.showTrackCoinNotice(pickupX, pickupY, "+1 COIN");
+  }
+
+  showTrackCoinNotice(
+    x,
+    y,
+    message,
+    color = "#fff0a8",
+    backgroundColor = "#6b3e15",
+  ) {
     const notice = this.add
-      .text(pickupX, pickupY - 22, "+1 COIN", {
+      .text(x, y - 22, message, {
         fontFamily: '"Courier New", monospace',
         fontSize: "12px",
         fontStyle: "bold",
-        color: "#fff0a8",
-        backgroundColor: "#6b3e15",
+        color,
+        backgroundColor,
         padding: { x: 5, y: 3 },
         resolution: 2,
       })

@@ -90,7 +90,8 @@ The meadow is an 8000 × 6000 world containing deterministic grass details,
 flower patches, puddles, fences, and three enterable structures:
 
 - **Meadow Stable** — an authored stall and feed-room interior.
-- **Horse Hospital** — restores all three hearts when entered.
+- **Horse Hospital** — restores all three hearts for 20 coins. Healthy horses
+  are not charged, and healing is refused when the account balance is too low.
 - **Circus Maximus** — a large Roman-inspired oval with stone stands, a central
   spina, turning posts, checkpoint markers, and a visible exit gate.
 
@@ -111,6 +112,7 @@ arena. The live timer:
 Twelve pixel coins are placed between the ordered race checkpoints. Each coin
 adds one coin to the persistent account and disappears when collected. The set
 respawns after a valid completed lap and whenever the arena is entered again.
+Coins can be spent on a full heal at the Horse Hospital.
 
 The arena exit is marked by a bright ground arrow and animated **EXIT** sign.
 Move near it and press **E** to return to the meadow.
