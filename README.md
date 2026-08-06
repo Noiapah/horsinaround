@@ -171,11 +171,22 @@ Rebuild all 40 runtime animation frames from the checked-in source sheets:
 ```
 
 Rebuild the Chestnut, Palomino, and Midnight runtime sheets from those canonical
-frames:
+frames and the checked-in Palomino semantic mask:
 
 ```powershell
 ./scripts/build-horse-skins.ps1
 ```
+
+Chestnut and Midnight use exact palette remaps. Palomino has its own golden
+coat palette plus a semantic flaxen atlas, so its pale mane and tail remain
+separate from dark hooves and moving leg shadows. Rebuild that atlas from the
+checked-in design reference with:
+
+```powershell
+./scripts/build-palomino-mask.ps1
+```
+
+The full animation rebuild runs both mask and skin builders automatically.
 
 Each generated skin sheet is 640 x 1024 pixels. Its eight rows contain `n`,
 `ne`, `e`, `se`, `s`, `sw`, `w`, and `nw`; its five 128 x 128 columns contain
@@ -211,10 +222,12 @@ will require an authenticated API and persistent database in a later phase.
 - `public/assets/horse/animation/` — 40 canonical frames plus the generated
   Chestnut, Palomino, and Midnight runtime sheets.
 - `public/assets/horse/source/` — checked-in directional animation source
-  sheets.
+  sheets plus the Palomino design reference and semantic flaxen atlas.
 - `public/assets/horse/animation-preview.png` — complete animation preview.
 - `scripts/build-animation-assets.ps1` — directional source-sheet converter.
 - `scripts/build-horse-skins.ps1` — runtime horse-skin sheet builder.
+- `scripts/build-palomino-mask.ps1` — deterministic Palomino semantic-atlas
+  builder.
 - `scripts/test-project.ps1` — server and runtime-asset validation.
 - `scripts/build-release.ps1` — static deployment packager.
 - `vendor/phaser.min.js` — pinned local Phaser runtime.

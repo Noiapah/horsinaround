@@ -1500,7 +1500,7 @@ class MeadowScene extends ProgressScene {
     this.physics.add.collider(this.horse, this.structureColliders);
 
     this.cameras.main.startFollow(this.horse, true, 0.09, 0.09);
-    this.cameras.main.setZoom(1.15);
+    this.cameras.main.setZoom(1);
 
     this.installHorseControls();
 
@@ -1576,7 +1576,6 @@ class MeadowScene extends ProgressScene {
       this.animationAccumulator = 0;
       this.horse.setScale(1);
       this.horse.setAngle(0);
-      this.horse.setY(Math.round(this.horse.y));
       this.dustTimer = 0;
       setHorseSpriteTexture(
         this.horse,
@@ -2258,11 +2257,7 @@ class MeadowScene extends ProgressScene {
   }
 
   createHud() {
-    // The main camera is zoomed, so fixed HUD coordinates need a small inset
-    // to remain inside the visible top-left safe area.
-    const hudOffsetX = 62;
-    const hudOffsetY = 35;
-    this.createHorseHud(hudOffsetX, hudOffsetY);
+    this.createHorseHud();
   }
 
 }

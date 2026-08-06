@@ -5,6 +5,9 @@ Add-Type -AssemblyName System.Drawing
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $animationRoot = Join-Path $projectRoot "public\assets\horse\animation"
+$palominoMaskPath = Join-Path `
+  $projectRoot `
+  "public\assets\horse\source\palomino-flaxen-mask.png"
 $directions = @("n", "ne", "e", "se", "s", "sw", "w", "nw")
 $sourcePalette = @(
   "31,22,13",
@@ -30,9 +33,9 @@ $skinPalettes = [ordered]@{
     "95,62,28",
     "166,111,42",
     "222,166,70",
-    "247,211,134",
-    "238,218,168",
-    "255,244,215"
+    "241,193,108",
+    "70,55,43",
+    "24,16,10"
   )
   midnight = @(
     "12,15,20",
@@ -43,6 +46,14 @@ $skinPalettes = [ordered]@{
     "20,22,29",
     "255,244,215"
   )
+}
+$palominoMaskColors = [ordered]@{
+  "255,0,0" = "176,157,112"
+  "255,96,0" = "226,213,174"
+  "255,192,0" = "255,244,215"
+  "0,0,255" = "176,157,112"
+  "0,96,255" = "226,213,174"
+  "0,192,255" = "255,244,215"
 }
 
 function Convert-ToColor([string]$value) {
@@ -58,90 +69,65 @@ function Convert-ToColor([string]$value) {
   )
 }
 
-function Test-LogicalBlockTouchesTransparency(
-  [System.Drawing.Bitmap]$image,
-  [int]$blockX,
-  [int]$blockY
-) {
-  $neighbors = @(
-    [pscustomobject]@{ X = $blockX - 4; Y = $blockY },
-    [pscustomobject]@{ X = $blockX + 4; Y = $blockY },
-    [pscustomobject]@{ X = $blockX; Y = $blockY - 4 },
-    [pscustomobject]@{ X = $blockX; Y = $blockY + 4 }
-  )
-  foreach ($neighbor in $neighbors) {
-    $x = $neighbor.X
-    $y = $neighbor.Y
-    if (
-      $x -lt 0 -or
-      $x -ge $image.Width -or
-      $y -lt 0 -or
-      $y -ge $image.Height
-    ) {
-      return $true
-    }
-    if ($image.GetPixel($x, $y).A -eq 0) {
-      return $true
-    }
-  }
-  return $false
-}
-
-function Repair-PalominoSilhouette(
+function Apply-PalominoSemanticMask(
   [System.Drawing.Bitmap]$sheet,
-  [string]$animationRoot,
-  [string[]]$directions
+  [string]$maskPath,
+  [System.Collections.IDictionary]$maskPalette
 ) {
-  # The source's neutral mane shade also serves as a moving-leg outline.
-  # Keep it cream inside the horse, but use the dark coat shade for exposed
-  # 4x4 edge blocks so walking frames do not flash a cream fringe.
-  $mixedSourceColor = Convert-ToColor "59,47,38"
-  $edgeColor = Convert-ToColor "95,62,28"
+  if (-not (Test-Path -LiteralPath $maskPath -PathType Leaf)) {
+    throw "Missing Palomino semantic mask: $maskPath"
+  }
+  $mask = [System.Drawing.Bitmap]::FromFile($maskPath)
+  try {
+    if ($mask.Width -ne 160 -or $mask.Height -ne 256) {
+      throw "Palomino semantic mask must be 160x256: $maskPath"
+    }
 
-  for ($row = 0; $row -lt $directions.Count; $row += 1) {
-    $direction = $directions[$row]
-    $frameNames = @(
-      "horse-$direction-idle.png",
-      "horse-$direction-walk-0.png",
-      "horse-$direction-walk-1.png",
-      "horse-$direction-walk-2.png",
-      "horse-$direction-walk-3.png"
-    )
-    for ($column = 0; $column -lt $frameNames.Count; $column += 1) {
-      $framePath = Join-Path $animationRoot $frameNames[$column]
-      $sourceImage = [System.Drawing.Bitmap]::FromFile($framePath)
-      try {
-        for ($blockY = 0; $blockY -lt 128; $blockY += 4) {
-          for ($blockX = 0; $blockX -lt 128; $blockX += 4) {
-            if (
-              $sourceImage.GetPixel($blockX, $blockY).ToArgb() -ne
-              $mixedSourceColor.ToArgb()
-            ) {
-              continue
-            }
-            $touchesTransparency = Test-LogicalBlockTouchesTransparency `
-              -image $sourceImage `
-              -blockX $blockX `
-              -blockY $blockY
-            if (-not $touchesTransparency) {
-              continue
-            }
+    $mappedColors = @{}
+    foreach ($sourceValue in $maskPalette.Keys) {
+      $sourceColor = Convert-ToColor $sourceValue
+      $mappedColors[$sourceColor.ToArgb()] = Convert-ToColor `
+        $maskPalette[$sourceValue]
+    }
 
-            for ($y = 0; $y -lt 4; $y += 1) {
-              for ($x = 0; $x -lt 4; $x += 1) {
-                $sheet.SetPixel(
-                  ($column * 128) + $blockX + $x,
-                  ($row * 128) + $blockY + $y,
-                  $edgeColor
-                )
-              }
+    for ($maskY = 0; $maskY -lt $mask.Height; $maskY += 1) {
+      for ($maskX = 0; $maskX -lt $mask.Width; $maskX += 1) {
+        $maskPixel = $mask.GetPixel($maskX, $maskY)
+        if ($maskPixel.A -eq 0) {
+          if ($maskPixel.ToArgb() -ne 0) {
+            throw "Palomino mask transparency must be zero RGBA at $maskX,$maskY."
+          }
+          continue
+        }
+        if ($maskPixel.A -ne 255) {
+          throw "Palomino mask must use binary alpha at $maskX,$maskY."
+        }
+        if (-not $mappedColors.ContainsKey($maskPixel.ToArgb())) {
+          throw "Unknown Palomino semantic mask color at $maskX,$maskY."
+        }
+
+        $sheetX = $maskX * 4
+        $sheetY = $maskY * 4
+        $targetColor = $mappedColors[$maskPixel.ToArgb()]
+        for ($blockY = 0; $blockY -lt 4; $blockY += 1) {
+          for ($blockX = 0; $blockX -lt 4; $blockX += 1) {
+            if ($sheet.GetPixel($sheetX + $blockX, $sheetY + $blockY).A -eq 0) {
+              throw (
+                "Palomino semantic mask leaves the horse silhouette at " +
+                "$maskX,$maskY."
+              )
             }
+            $sheet.SetPixel(
+              $sheetX + $blockX,
+              $sheetY + $blockY,
+              $targetColor
+            )
           }
         }
-      } finally {
-        $sourceImage.Dispose()
       }
     }
+  } finally {
+    $mask.Dispose()
   }
 }
 
@@ -228,7 +214,10 @@ foreach ($skinId in $skinPalettes.Keys) {
     }
 
     if ($skinId -eq "palomino") {
-      Repair-PalominoSilhouette $sheet $animationRoot $directions
+      Apply-PalominoSemanticMask `
+        $sheet `
+        $palominoMaskPath `
+        $palominoMaskColors
     }
 
     $outputPath = Join-Path $animationRoot "horse-$skinId-sheet.png"

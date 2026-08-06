@@ -32,17 +32,50 @@ $palette = @(
     [System.Drawing.Color]::FromArgb(255, 59, 47, 38)
 )
 $eyeColor = [System.Drawing.Color]::FromArgb(255, 255, 244, 215)
-
-function Test-IsBackground([System.Drawing.Color]$color) {
-    $isMagenta = $color.R -gt 175 -and $color.B -gt 145 -and $color.G -lt 125
-    $isWhite = $color.R -gt 235 -and $color.G -gt 235 -and $color.B -gt 235
-    return $isMagenta -or $isWhite
+# These source-authored colors flash for one frame inside otherwise stable body
+# pixels. Each correction verifies its original role before replacing it, so a
+# future source change fails loudly instead of silently repainting anatomy.
+$transientColorCorrections = @{
+    "se:0" = @(
+        [pscustomobject]@{ Point = [System.Drawing.Point]::new(27, 25); From = 4; To = 3 }
+    )
+    "se:2" = @(
+        [pscustomobject]@{ Point = [System.Drawing.Point]::new(27, 25); From = 4; To = 3 }
+    )
+    "se:3" = @(
+        [pscustomobject]@{ Point = [System.Drawing.Point]::new(25, 25); From = 4; To = 3 },
+        [pscustomobject]@{ Point = [System.Drawing.Point]::new(26, 25); From = 4; To = 3 }
+    )
+    "sw:0" = @(
+        [pscustomobject]@{ Point = [System.Drawing.Point]::new(13, 15); From = 4; To = 3 }
+    )
+    "sw:1" = @(
+        [pscustomobject]@{ Point = [System.Drawing.Point]::new(15, 15); From = 5; To = 0 },
+        [pscustomobject]@{ Point = [System.Drawing.Point]::new(15, 16); From = 5; To = 0 }
+    )
+    "sw:3" = @(
+        [pscustomobject]@{ Point = [System.Drawing.Point]::new(14, 16); From = 5; To = 1 }
+    )
 }
 
-function Get-NearestPaletteColor(
-    [System.Drawing.Color]$color,
-    [bool]$allowEye
-) {
+function Test-IsBackground([System.Drawing.Color]$color) {
+    $isPink =
+        $color.R -gt 175 -and
+        $color.B -gt 145 -and
+        (
+            $color.R - $color.G -gt 12 -or
+            $color.B - $color.G -gt 12
+        )
+    return $isPink
+}
+
+function Test-IsBoundsBackdrop([System.Drawing.Color]$color) {
+    # Bounds detection must reject both the pink chroma key and its pale,
+    # antialiased white separators. Horse colors never occupy this range.
+    return $color.R -gt 175 -and $color.B -gt 145
+}
+
+function Get-NearestPaletteColor([System.Drawing.Color]$color) {
     if ($color.A -lt 80) {
         return [System.Drawing.Color]::Transparent
     }
@@ -50,9 +83,6 @@ function Get-NearestPaletteColor(
     $available = [System.Collections.Generic.List[System.Drawing.Color]]::new()
     foreach ($entry in $palette) {
         $available.Add($entry)
-    }
-    if ($allowEye) {
-        $available.Add($eyeColor)
     }
 
     $best = $available[0]
@@ -68,6 +98,67 @@ function Get-NearestPaletteColor(
         }
     }
     return $best
+}
+
+function Get-EyeCenter(
+    [System.Drawing.Bitmap]$sheet,
+    [System.Drawing.Rectangle]$cell,
+    [System.Drawing.Rectangle]$bound
+) {
+    $totalX = 0.0
+    $totalY = 0.0
+    $count = 0
+    for ($y = $bound.Top; $y -lt $bound.Bottom; $y += 1) {
+        for ($x = $bound.Left; $x -lt $bound.Right; $x += 1) {
+            $pixel = $sheet.GetPixel($cell.X + $x, $cell.Y + $y)
+            if (
+                $pixel.R -gt 235 -and
+                $pixel.G -gt 235 -and
+                $pixel.B -gt 235
+            ) {
+                $totalX += $x + 0.5
+                $totalY += $y + 0.5
+                $count += 1
+            }
+        }
+    }
+    if ($count -eq 0) {
+        throw "Missing side-profile eye in animation source."
+    }
+    return [System.Drawing.PointF]::new(
+        [float]($totalX / $count),
+        [float]($totalY / $count)
+    )
+}
+
+function Find-NearestOpaquePoint(
+    [System.Drawing.Bitmap]$image,
+    [System.Drawing.Point]$origin,
+    [int]$maximumRadius = 3
+) {
+    $bestPoint = $null
+    $bestDistance = [int]::MaxValue
+    for ($offsetY = -$maximumRadius; $offsetY -le $maximumRadius; $offsetY += 1) {
+        for ($offsetX = -$maximumRadius; $offsetX -le $maximumRadius; $offsetX += 1) {
+            $x = $origin.X + $offsetX
+            $y = $origin.Y + $offsetY
+            if (
+                $x -lt 0 -or
+                $x -ge $image.Width -or
+                $y -lt 0 -or
+                $y -ge $image.Height -or
+                $image.GetPixel($x, $y).A -eq 0
+            ) {
+                continue
+            }
+            $distance = ($offsetX * $offsetX) + ($offsetY * $offsetY)
+            if ($distance -lt $bestDistance) {
+                $bestDistance = $distance
+                $bestPoint = [System.Drawing.Point]::new($x, $y)
+            }
+        }
+    }
+    return $bestPoint
 }
 
 foreach ($direction in $sheets.Keys) {
@@ -115,7 +206,7 @@ foreach ($direction in $sheets.Keys) {
             for ($y = 0; $y -lt $cell.Height; $y += 4) {
                 for ($x = 0; $x -lt $cell.Width; $x += 4) {
                     $pixel = $sheet.GetPixel($cell.X + $x, $cell.Y + $y)
-                    if (-not (Test-IsBackground $pixel)) {
+                    if (-not (Test-IsBoundsBackdrop $pixel)) {
                         $minX = [Math]::Min($minX, $x)
                         $minY = [Math]::Min($minY, $y)
                         $maxX = [Math]::Max($maxX, $x)
@@ -125,6 +216,17 @@ foreach ($direction in $sheets.Keys) {
             }
             if ($maxX -lt 0) {
                 throw "No horse pixels found in $direction animation cell."
+            }
+            if (
+                $minX -le 0 -or
+                $minY -le 0 -or
+                $maxX + 4 -ge $cell.Width -or
+                $maxY + 4 -ge $cell.Height
+            ) {
+                throw (
+                    "Horse bounds touch an animation-cell edge for " +
+                    "$direction; backdrop detection is contaminated."
+                )
             }
             $bounds += [System.Drawing.Rectangle]::FromLTRB($minX, $minY, $maxX + 4, $maxY + 4)
         }
@@ -166,6 +268,29 @@ foreach ($direction in $sheets.Keys) {
                     $drawHeight = [Math]::Max(1, [int][Math]::Round($bound.Height * $scale))
                     $drawX = [int][Math]::Round(($logicalSize - $drawWidth) / 2)
                     $drawY = [int][Math]::Round(($logicalSize - $drawHeight) / 2)
+                    $allowEye = $direction -eq "e" -or $direction -eq "w"
+                    $eyeTarget = $null
+                    if ($allowEye) {
+                        $eyeCenter = Get-EyeCenter $sheet $cell $bound
+                        $eyeX = $drawX + [int][Math]::Floor(
+                            (($eyeCenter.X - $bound.Left) / $bound.Width) *
+                            $drawWidth
+                        )
+                        $eyeY = $drawY + [int][Math]::Floor(
+                            (($eyeCenter.Y - $bound.Top) / $bound.Height) *
+                            $drawHeight
+                        )
+                        $eyeTarget = [System.Drawing.Point]::new(
+                            [Math]::Max(
+                                0,
+                                [Math]::Min($logicalSize - 1, $eyeX)
+                            ),
+                            [Math]::Max(
+                                0,
+                                [Math]::Min($logicalSize - 1, $eyeY)
+                            )
+                        )
+                    }
                     $destination = [System.Drawing.Rectangle]::new(
                         $drawX,
                         $drawY,
@@ -188,16 +313,46 @@ foreach ($direction in $sheets.Keys) {
                     $graphics.Dispose()
                 }
 
-                $allowEye = $direction -eq "e" -or $direction -eq "w"
                 for ($y = 0; $y -lt $logicalSize; $y += 1) {
                     for ($x = 0; $x -lt $logicalSize; $x += 1) {
                         $pixel = $logical.GetPixel($x, $y)
                         if (Test-IsBackground $pixel) {
                             $mapped = [System.Drawing.Color]::Transparent
                         } else {
-                            $mapped = Get-NearestPaletteColor $pixel $allowEye
+                            $mapped = Get-NearestPaletteColor $pixel
                         }
                         $logical.SetPixel($x, $y, $mapped)
+                    }
+                }
+                if ($eyeTarget) {
+                    $eyeTarget = Find-NearestOpaquePoint $logical $eyeTarget
+                    if (-not $eyeTarget) {
+                        throw (
+                            "Could not place the side-profile eye for " +
+                            "$direction walk frame $frame."
+                        )
+                    }
+                    $logical.SetPixel($eyeTarget.X, $eyeTarget.Y, $eyeColor)
+                }
+                $correctionKey = "${direction}:$frame"
+                if ($transientColorCorrections.ContainsKey($correctionKey)) {
+                    foreach ($correction in $transientColorCorrections[$correctionKey]) {
+                        $point = $correction.Point
+                        if (
+                            $logical.GetPixel($point.X, $point.Y).ToArgb() -ne
+                            $palette[$correction.From].ToArgb()
+                        ) {
+                            throw (
+                                "Expected transient color role is missing for " +
+                                "$direction walk frame $frame at " +
+                                "$($point.X),$($point.Y); review the source before rebuilding."
+                            )
+                        }
+                        $logical.SetPixel(
+                            $point.X,
+                            $point.Y,
+                            $palette[$correction.To]
+                        )
                     }
                 }
 
@@ -288,6 +443,7 @@ try {
     $preview.Dispose()
 }
 
+& (Join-Path $PSScriptRoot "build-palomino-mask.ps1")
 & (Join-Path $PSScriptRoot "build-horse-skins.ps1")
 
 Write-Output "Built 40 canonical animation images and 3 horse skin sheets in $outputRoot"
