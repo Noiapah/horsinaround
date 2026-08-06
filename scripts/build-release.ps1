@@ -88,18 +88,22 @@ Copy-Item -LiteralPath (Join-Path $projectRoot "src\styles.css") `
 Copy-Item -LiteralPath (Join-Path $projectRoot "vendor\phaser.min.js") `
   -Destination $vendorOutput
 
-$directions = @("n", "ne", "e", "se", "s", "sw", "w", "nw")
-$runtimeFrames = @()
-foreach ($direction in $directions) {
-  $runtimeFrames += "horse-$direction-idle.png"
-  for ($frame = 0; $frame -lt 4; $frame += 1) {
-    $runtimeFrames += "horse-$direction-walk-$frame.png"
-  }
+$skinIds = @("chestnut", "palomino", "midnight")
+$runtimeSheets = @(
+  $skinIds | ForEach-Object { "horse-$_-sheet.png" }
+)
+if ($runtimeSheets.Count -ne 3) {
+  throw "Expected exactly 3 runtime horse skin sheets."
 }
-foreach ($frameName in $runtimeFrames) {
-  Copy-Item -LiteralPath (
-    Join-Path $projectRoot "public\assets\horse\animation\$frameName"
-  ) -Destination $animationOutput
+
+foreach ($sheetName in $runtimeSheets) {
+  $sheetPath = Join-Path (
+    Join-Path $projectRoot "public\assets\horse\animation"
+  ) $sheetName
+  if (-not (Test-Path -LiteralPath $sheetPath -PathType Leaf)) {
+    throw "Missing runtime horse skin sheet: $sheetPath"
+  }
+  Copy-Item -LiteralPath $sheetPath -Destination $animationOutput
 }
 
 $releaseBytes = (

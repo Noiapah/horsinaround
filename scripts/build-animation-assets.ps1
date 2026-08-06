@@ -2,6 +2,7 @@ param(
     [switch]$Force
 )
 
+$ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -287,4 +288,6 @@ try {
     $preview.Dispose()
 }
 
-Write-Output "Built 40 animation images in $outputRoot"
+& (Join-Path $PSScriptRoot "build-horse-skins.ps1")
+
+Write-Output "Built 40 canonical animation images and 3 horse skin sheets in $outputRoot"

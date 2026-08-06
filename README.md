@@ -41,7 +41,7 @@ racetrack.
 | **V** | Hold while moving to walk |
 | **Shift** | Hold while moving to canter and charge a gallop |
 | **Space** | Jump over eligible obstacles |
-| **E** | Enter or leave a nearby facility |
+| **E** | Enter or leave a nearby facility, or select a displayed stable horse |
 
 Diagonal movement is normalized, so it is not faster than horizontal or
 vertical movement.
@@ -99,6 +99,13 @@ All facilities use the same movement, gait, jump, interaction, and HUD systems
 as the meadow. Ordinary interior obstacles can be jumped, while boundary walls
 remain solid.
 
+### Stable horse selection
+
+The Meadow Stable displays three selectable horse skins: **Chestnut**,
+**Palomino**, and **Midnight**. Stand before a displayed horse and press **E**
+to select it. The selected skin is applied in every area and remains selected
+after leaving the stable or reloading the game.
+
 ### Circus Maximus laps
 
 Cross the checkered starting line and follow the checkpoint route around the
@@ -131,6 +138,7 @@ model containing:
 - Current world or facility location.
 - Validated horse position.
 - Coin-account balance.
+- Selected horse skin.
 - Save revision and timestamp.
 - Racetrack records.
 
@@ -162,6 +170,17 @@ Rebuild all 40 runtime animation frames from the checked-in source sheets:
 ./scripts/build-animation-assets.ps1 -Force
 ```
 
+Rebuild the Chestnut, Palomino, and Midnight runtime sheets from those canonical
+frames:
+
+```powershell
+./scripts/build-horse-skins.ps1
+```
+
+Each generated skin sheet is 640 x 1024 pixels. Its eight rows contain `n`,
+`ne`, `e`, `se`, `s`, `sw`, `w`, and `nw`; its five 128 x 128 columns contain
+the idle frame followed by walk frames 0 through 3.
+
 Build the static production bundle:
 
 ```powershell
@@ -169,8 +188,8 @@ Build the static production bundle:
 ```
 
 The release is written to `dist/` and contains only the HTML, CSS, game code,
-pinned Phaser runtime, and 40 runtime horse frames. Source artwork and animation
-working files are excluded.
+pinned Phaser runtime, and runtime horse animation assets. Source artwork and
+animation working files are excluded.
 
 ## Deployment and current limitations
 
@@ -189,10 +208,13 @@ will require an authenticated API and persistent database in a later phase.
 - `src/game.js` — gameplay, progress model, world generation, and Phaser scenes.
 - `src/styles.css` — full-window game presentation.
 - `server.ps1` — restricted loopback development server.
-- `public/assets/horse/animation/` — five PNG frames for each direction.
-- `public/assets/horse/source/` — checked-in animation source sheets.
+- `public/assets/horse/animation/` — 40 canonical frames plus the generated
+  Chestnut, Palomino, and Midnight runtime sheets.
+- `public/assets/horse/source/` — checked-in directional animation source
+  sheets.
 - `public/assets/horse/animation-preview.png` — complete animation preview.
-- `scripts/build-animation-assets.ps1` — sprite-sheet converter.
+- `scripts/build-animation-assets.ps1` — directional source-sheet converter.
+- `scripts/build-horse-skins.ps1` — runtime horse-skin sheet builder.
 - `scripts/test-project.ps1` — server and runtime-asset validation.
 - `scripts/build-release.ps1` — static deployment packager.
 - `vendor/phaser.min.js` — pinned local Phaser runtime.

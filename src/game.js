@@ -4,7 +4,7 @@ const START_X = WORLD_WIDTH / 2;
 const START_Y = WORLD_HEIGHT / 2;
 const MAX_LIVES = 3;
 const WORLD_VERSION = 2;
-const PROGRESS_SCHEMA_VERSION = 3;
+const PROGRESS_SCHEMA_VERSION = 4;
 const PROGRESS_STORAGE_KEY = "horsin-around-progress";
 const PROGRESS_LEASE_KEY = `${PROGRESS_STORAGE_KEY}:lease`;
 const PROGRESS_LEASE_MS = 12000;
@@ -18,6 +18,30 @@ const JUMP_DURATION_MS = 850;
 const JUMP_COOLDOWN_MS = 1050;
 const JUMP_HEIGHT = 48;
 const HORSE_DIRECTIONS = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
+const DEFAULT_HORSE_SKIN_ID = "chestnut";
+const HORSE_SKINS = [
+  {
+    id: "chestnut",
+    name: "CHESTNUT",
+    textureKey: "horse-skin-chestnut",
+    assetPath: "./public/assets/horse/animation/horse-chestnut-sheet.png",
+  },
+  {
+    id: "palomino",
+    name: "PALOMINO",
+    textureKey: "horse-skin-palomino",
+    assetPath: "./public/assets/horse/animation/horse-palomino-sheet.png",
+  },
+  {
+    id: "midnight",
+    name: "MIDNIGHT",
+    textureKey: "horse-skin-midnight",
+    assetPath: "./public/assets/horse/animation/horse-midnight-sheet.png",
+  },
+];
+const HORSE_SKIN_BY_ID = new Map(
+  HORSE_SKINS.map((skin) => [skin.id, skin]),
+);
 const GALLOP_CHARGE_MS = 4500;
 const TRACK_LOGICAL_WIDTH = 2800;
 const TRACK_LOGICAL_HEIGHT = 1100;
@@ -71,6 +95,41 @@ const GAITS = {
     color: "#ff8a5b",
   },
 };
+
+function normalizeHorseSkinId(value) {
+  return typeof value === "string" && HORSE_SKIN_BY_ID.has(value)
+    ? value
+    : DEFAULT_HORSE_SKIN_ID;
+}
+
+function getHorseFrameIndex(direction, movementFrame = null) {
+  const directionIndex = HORSE_DIRECTIONS.indexOf(direction);
+  const safeDirectionIndex = directionIndex >= 0 ? directionIndex : 0;
+  const poseIndex =
+    movementFrame === null
+      ? 0
+      : Math.min(Math.max(Math.trunc(Number(movementFrame)) || 0, 0), 3) + 1;
+  return safeDirectionIndex * 5 + poseIndex;
+}
+
+function getHorseTextureSpec(skinId, direction, movementFrame = null) {
+  const skin = HORSE_SKIN_BY_ID.get(normalizeHorseSkinId(skinId));
+  return {
+    key: skin.textureKey,
+    frame: getHorseFrameIndex(direction, movementFrame),
+  };
+}
+
+function setHorseSpriteTexture(
+  sprite,
+  skinId,
+  direction,
+  movementFrame = null,
+) {
+  const texture = getHorseTextureSpec(skinId, direction, movementFrame);
+  sprite.setTexture(texture.key, texture.frame);
+  return sprite;
+}
 
 function resolveGaitState({
   isMoving,
@@ -355,6 +414,7 @@ class HorseProgress {
     revision = 0,
     lives = MAX_LIVES,
     coins = 0,
+    selectedHorseSkinId = DEFAULT_HORSE_SKIN_ID,
     location = {
       type: "world",
       id: "meadow",
@@ -369,6 +429,7 @@ class HorseProgress {
     this.revision = revision;
     this.lives = lives;
     this.coins = normalizeCoinBalance(coins);
+    this.selectedHorseSkinId = normalizeHorseSkinId(selectedHorseSkinId);
     this.location = {
       type: location.type,
       id: location.id,
@@ -425,6 +486,7 @@ class HorseProgress {
           ? Math.min(savedLives, MAX_LIVES)
           : MAX_LIVES,
       coins: normalizeCoinBalance(value.coins),
+      selectedHorseSkinId: normalizeHorseSkinId(value.selectedHorseSkinId),
       location: {
         type: locationType,
         id: locationType === "interior" ? sourceLocation.id : "meadow",
@@ -468,6 +530,12 @@ class HorseProgress {
     return true;
   }
 
+  selectHorseSkin(skinId) {
+    if (!HORSE_SKIN_BY_ID.has(skinId)) return false;
+    this.selectedHorseSkinId = skinId;
+    return true;
+  }
+
   setLocation(type, id, x, y, entranceId = null) {
     this.location = {
       type,
@@ -492,6 +560,7 @@ class HorseProgress {
       revision: this.revision,
       lives: this.lives,
       coins: this.coins,
+      selectedHorseSkinId: this.selectedHorseSkinId,
       location: {
         ...this.location,
         position: { ...this.location.position },
@@ -528,6 +597,7 @@ function reconcileStoredProgress(progress, storedProgress) {
     // A newer lease owner may have spent coins. Never resurrect that stale
     // balance when this tab later takes over saving.
     progress.coins = storedProgress.coins;
+    progress.selectedHorseSkinId = storedProgress.selectedHorseSkinId;
   }
   progress.revision = Math.max(
     progress.revision,
@@ -634,7 +704,7 @@ class LocalProgressStore {
     }
   }
 
-  commitEconomyMutation(progress, applyMutation) {
+  commitProgressMutation(progress, applyMutation) {
     let rollbackState = null;
     try {
       if (!this.tryAcquireLease()) {
@@ -660,7 +730,7 @@ class LocalProgressStore {
         );
       }
       this.releaseLease();
-      console.warn("Could not save coin transaction.", error);
+      console.warn("Could not save progress transaction.", error);
       return { status: "unavailable", balance: progress.coins };
     }
   }
@@ -670,7 +740,7 @@ class LocalProgressStore {
     if (!Number.isSafeInteger(earnings) || earnings <= 0) {
       return { status: "invalid", balance: progress.coins };
     }
-    return this.commitEconomyMutation(progress, () => {
+    return this.commitProgressMutation(progress, () => {
       progress.earnCoins(earnings);
       return { status: "earned", changed: true };
     });
@@ -685,12 +755,25 @@ class LocalProgressStore {
     ) {
       return { status: "invalid", balance: progress.coins };
     }
-    return this.commitEconomyMutation(progress, () => {
+    return this.commitProgressMutation(progress, () => {
       if (!progress.spendCoins(cost)) {
         return { status: "insufficient", changed: false };
       }
       applyPurchase();
       return { status: "purchased", changed: true };
+    });
+  }
+
+  commitHorseSelection(progress, skinId) {
+    if (!HORSE_SKIN_BY_ID.has(skinId)) {
+      return { status: "invalid", balance: progress.coins };
+    }
+    return this.commitProgressMutation(progress, () => {
+      if (progress.selectedHorseSkinId === skinId) {
+        return { status: "unchanged", changed: false };
+      }
+      progress.selectHorseSkin(skinId);
+      return { status: "selected", changed: true };
     });
   }
 
@@ -1124,17 +1207,11 @@ class BootScene extends Phaser.Scene {
   }
 
   preload() {
-    for (const direction of HORSE_DIRECTIONS) {
-      this.load.image(
-        `horse-${direction}-idle`,
-        `./public/assets/horse/animation/horse-${direction}-idle.png`,
-      );
-      for (let frame = 0; frame < 4; frame += 1) {
-        this.load.image(
-          `horse-${direction}-walk-${frame}`,
-          `./public/assets/horse/animation/horse-${direction}-walk-${frame}.png`,
-        );
-      }
+    for (const skin of HORSE_SKINS) {
+      this.load.spritesheet(skin.textureKey, skin.assetPath, {
+        frameWidth: 128,
+        frameHeight: 128,
+      });
     }
   }
 
@@ -1398,8 +1475,17 @@ class MeadowScene extends ProgressScene {
       )
       .setDepth(9);
 
+    const initialHorseTexture = getHorseTextureSpec(
+      this.progress.selectedHorseSkinId,
+      "n",
+    );
     this.horse = this.physics.add
-      .sprite(spawn.x, spawn.y, "horse-n-idle")
+      .sprite(
+        spawn.x,
+        spawn.y,
+        initialHorseTexture.key,
+        initialHorseTexture.frame,
+      )
       .setDepth(10)
       .setCollideWorldBounds(true);
 
@@ -1492,7 +1578,11 @@ class MeadowScene extends ProgressScene {
       this.horse.setAngle(0);
       this.horse.setY(Math.round(this.horse.y));
       this.dustTimer = 0;
-      this.horse.setTexture(`horse-${this.currentFacing}-idle`);
+      setHorseSpriteTexture(
+        this.horse,
+        this.progress.selectedHorseSkinId,
+        this.currentFacing,
+      );
       this.updateShadow(0);
       updateHorseJump(this, time);
       this.updateHorseHud(delta);
@@ -1528,8 +1618,11 @@ class MeadowScene extends ProgressScene {
 
     this.horse.setScale(1);
     this.horse.setAngle(0);
-    this.horse.setTexture(
-      `horse-${this.currentFacing}-walk-${this.movementFrame}`,
+    setHorseSpriteTexture(
+      this.horse,
+      this.progress.selectedHorseSkinId,
+      this.currentFacing,
+      this.movementFrame,
     );
 
     const liftByFrame = [0.12, 0, 0.08, 0.04];
@@ -1623,7 +1716,11 @@ class MeadowScene extends ProgressScene {
     );
     this.horse.body.reset(returnPosition.x, returnPosition.y);
     this.horse.setVelocity(0, 0);
-    this.horse.setTexture("horse-s-idle");
+    setHorseSpriteTexture(
+      this.horse,
+      this.progress.selectedHorseSkinId,
+      "s",
+    );
     this.horse.setDisplayOrigin(64, 64);
     this.horse.setScale(1);
     this.horse.clearTint();
@@ -1791,7 +1888,11 @@ class MeadowScene extends ProgressScene {
     resetHorseJump(this, this.time.now + 500);
     this.hitCooldownUntil = this.time.now + 1200;
     this.horse.body.reset(resetPosition.x, resetPosition.y);
-    this.horse.setTexture("horse-n-idle");
+    setHorseSpriteTexture(
+      this.horse,
+      this.progress.selectedHorseSkinId,
+      "n",
+    );
     this.horse.setDisplayOrigin(64, 64);
     this.horse.setScale(1);
     this.horse.setAngle(0);
@@ -2225,8 +2326,17 @@ class BaseInteriorScene extends ProgressScene {
     this.horseShadow = this.add
       .ellipse(spawn.x, spawn.y + 30, 54, 16, 0x151b14, 0.28)
       .setDepth(19);
+    const initialHorseTexture = getHorseTextureSpec(
+      this.progress.selectedHorseSkinId,
+      "n",
+    );
     this.horse = this.physics.add
-      .sprite(spawn.x, spawn.y, "horse-n-idle")
+      .sprite(
+        spawn.x,
+        spawn.y,
+        initialHorseTexture.key,
+        initialHorseTexture.frame,
+      )
       .setDepth(20)
       .setCollideWorldBounds(true);
     this.physics.world.setBounds(
@@ -2318,7 +2428,11 @@ class BaseInteriorScene extends ProgressScene {
     );
     this.horse.body.reset(spawn.x, spawn.y);
     this.horse.setVelocity(0, 0);
-    this.horse.setTexture("horse-n-idle");
+    setHorseSpriteTexture(
+      this.horse,
+      this.progress.selectedHorseSkinId,
+      "n",
+    );
     this.horse.setDisplayOrigin(64, 64);
     this.horse.setScale(1);
     this.currentFacing = "n";
@@ -2379,8 +2493,11 @@ class BaseInteriorScene extends ProgressScene {
         this.animationAccumulator -= frameDuration;
         this.movementFrame = (this.movementFrame + 1) % 4;
       }
-      this.horse.setTexture(
-        `horse-${this.currentFacing}-walk-${this.movementFrame}`,
+      setHorseSpriteTexture(
+        this.horse,
+        this.progress.selectedHorseSkinId,
+        this.currentFacing,
+        this.movementFrame,
       );
       this.emitDust(direction, gait, delta);
     } else {
@@ -2388,7 +2505,11 @@ class BaseInteriorScene extends ProgressScene {
       this.movementFrame = 0;
       this.animationAccumulator = 0;
       this.dustTimer = 0;
-      this.horse.setTexture(`horse-${this.currentFacing}-idle`);
+      setHorseSpriteTexture(
+        this.horse,
+        this.progress.selectedHorseSkinId,
+        this.currentFacing,
+      );
     }
 
     this.horseShadow.setPosition(this.horse.x, this.horse.y + 31);
@@ -2622,10 +2743,16 @@ class BaseInteriorScene extends ProgressScene {
 class StableInteriorScene extends BaseInteriorScene {
   constructor() {
     super("stable-interior", "stable-main");
+    this.stallChoices = [];
+    this.selectionPrompt = null;
+    this.selectionStatus = null;
+    this.selectionStatusUntil = 0;
+    this.renderedHorseSkinId = null;
   }
 
   buildInterior() {
     this.exitPoint = { x: 480, y: 590 };
+    this.stallChoices = [];
     const room = this.add.graphics().setDepth(0);
     room.fillStyle(0x50351f);
     room.fillRect(0, 0, this.interiorWidth, this.interiorHeight);
@@ -2636,26 +2763,208 @@ class StableInteriorScene extends BaseInteriorScene {
       room.lineBetween(28, y, this.interiorWidth - 28, y);
     }
 
-    room.fillStyle(0x342419);
-    for (const x of [170, 790]) {
-      room.fillRect(x - 110, 80, 220, 300);
-      room.fillStyle(0x9b6931);
-      room.fillRect(x - 96, 94, 192, 272);
+    const stallXs = [170, 480, 790];
+    for (let index = 0; index < HORSE_SKINS.length; index += 1) {
+      const skin = HORSE_SKINS[index];
+      const x = stallXs[index];
       room.fillStyle(0x342419);
-      for (let y = 126; y < 360; y += 70) {
-        room.fillRect(x - 96, y, 192, 10);
+      room.fillRect(x - 112, 72, 224, 298);
+      room.fillStyle(0x9b6931);
+      room.fillRect(x - 100, 86, 200, 270);
+      room.fillStyle(0x342419);
+      for (let y = 116; y < 348; y += 72) {
+        room.fillRect(x - 100, y, 200, 9);
       }
-      this.addCollisionRect(x, 230, 220, 300);
+      room.fillStyle(0xd5ac54);
+      room.fillRect(x - 42, 390, 84, 8);
+
+      this.addCollisionRect(x, 221, 224, 298, true);
+
+      this.add
+        .ellipse(x, 270, 76, 20, 0x1b160f, 0.3)
+        .setDepth(3);
+      const displayTexture = getHorseTextureSpec(skin.id, "e");
+      this.add
+        .sprite(x, 240, displayTexture.key, displayTexture.frame)
+        .setDepth(5);
+
+      const nameLabel = this.add
+        .text(x, 95, skin.name, {
+          fontFamily: '"Courier New", monospace',
+          fontSize: "12px",
+          fontStyle: "bold",
+          color: "#e8c978",
+          backgroundColor: "#342419",
+          padding: { x: 5, y: 3 },
+          resolution: 2,
+        })
+        .setOrigin(0.5)
+        .setDepth(9);
+      const activeMarker = this.add
+        .text(x, 326, "RIDING", {
+          fontFamily: '"Courier New", monospace',
+          fontSize: "10px",
+          fontStyle: "bold",
+          color: "#fff4bd",
+          backgroundColor: "#365d33",
+          padding: { x: 4, y: 2 },
+          resolution: 2,
+        })
+        .setOrigin(0.5)
+        .setDepth(9)
+        .setVisible(false);
+
+      this.stallChoices.push({
+        skin,
+        x,
+        interactionPoint: { x, y: 400 },
+        nameLabel,
+        activeMarker,
+      });
     }
 
-    room.fillStyle(0xd5ac54);
-    room.fillRect(398, 102, 164, 74);
-    room.fillStyle(0xf0cd73);
-    room.fillRect(412, 114, 136, 50);
-    this.addCollisionRect(480, 139, 164, 74);
+    const rails = this.add.graphics().setDepth(8);
+    rails.fillStyle(0x5a3b22);
+    for (const x of stallXs) {
+      rails.fillRect(x - 106, 344, 212, 12);
+      rails.fillRect(x - 106, 318, 12, 50);
+      rails.fillRect(x + 94, 318, 12, 50);
+    }
 
     room.fillStyle(0x2d2017);
     room.fillRect(420, 600, 120, 40);
+
+    this.selectionPrompt = this.add
+      .text(0, 0, "", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#fff4bd",
+        backgroundColor: "#142416",
+        padding: { x: 6, y: 4 },
+        resolution: 2,
+      })
+      .setOrigin(0.5)
+      .setDepth(40)
+      .setVisible(false);
+
+    this.selectionStatus = this.add
+      .text(480, 490, "", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#bde59f",
+        backgroundColor: "#142416",
+        padding: { x: 6, y: 4 },
+        resolution: 2,
+      })
+      .setOrigin(0.5)
+      .setDepth(40)
+      .setVisible(false);
+  }
+
+  onFacilityEntered() {
+    this.selectionPrompt?.setVisible(false);
+    this.selectionStatus?.setVisible(false);
+    this.selectionStatusUntil = 0;
+    this.refreshStableSelection();
+    return false;
+  }
+
+  refreshStableSelection() {
+    for (const choice of this.stallChoices) {
+      const isActive = choice.skin.id === this.progress.selectedHorseSkinId;
+      choice.nameLabel.setColor(isActive ? "#fff4bd" : "#e8c978");
+      choice.activeMarker.setVisible(isActive);
+    }
+    this.renderedHorseSkinId = this.progress.selectedHorseSkinId;
+  }
+
+  getNearbyStallChoice() {
+    let nearest = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const choice of this.stallChoices) {
+      const distance = Phaser.Math.Distance.Between(
+        this.horse.x,
+        this.horse.y,
+        choice.interactionPoint.x,
+        choice.interactionPoint.y,
+      );
+      if (distance < nearestDistance) {
+        nearest = choice;
+        nearestDistance = distance;
+      }
+    }
+    return nearestDistance <= 96 ? nearest : null;
+  }
+
+  updateFacility(time) {
+    if (this.renderedHorseSkinId !== this.progress.selectedHorseSkinId) {
+      this.refreshStableSelection();
+    }
+    if (this.selectionStatus?.visible && time >= this.selectionStatusUntil) {
+      this.selectionStatus.setVisible(false);
+    }
+
+    const choice = this.isJumping ? null : this.getNearbyStallChoice();
+    if (!choice) {
+      this.selectionPrompt.setVisible(false);
+      return;
+    }
+
+    const isActive = choice.skin.id === this.progress.selectedHorseSkinId;
+    this.selectionPrompt
+      .setText(
+        isActive
+          ? `CURRENT HORSE: ${choice.skin.name}`
+          : `E  RIDE ${choice.skin.name}`,
+      )
+      .setPosition(choice.x, 390)
+      .setVisible(true);
+
+    if (!Phaser.Input.Keyboard.JustDown(this.keys.interact)) return;
+
+    const result = this.progressStore.commitHorseSelection(
+      this.progress,
+      choice.skin.id,
+    );
+    if (result.status === "selected" || result.status === "unchanged") {
+      setHorseSpriteTexture(
+        this.horse,
+        this.progress.selectedHorseSkinId,
+        this.currentFacing,
+        this.currentGait === "idle" ? null : this.movementFrame,
+      );
+      this.refreshStableSelection();
+      this.selectionPrompt.setText(
+        `CURRENT HORSE: ${choice.skin.name}`,
+      );
+      this.showSelectionStatus(
+        result.status === "selected"
+          ? `NOW RIDING: ${choice.skin.name}`
+          : `ALREADY RIDING: ${choice.skin.name}`,
+        "#bde59f",
+        time,
+      );
+      return;
+    }
+
+    setHorseSpriteTexture(
+      this.horse,
+      this.progress.selectedHorseSkinId,
+      this.currentFacing,
+      this.currentGait === "idle" ? null : this.movementFrame,
+    );
+    this.refreshStableSelection();
+    this.showSelectionStatus("SELECTION UNAVAILABLE", "#ffb0a8", time);
+  }
+
+  showSelectionStatus(message, color, time) {
+    this.selectionStatus
+      .setText(message)
+      .setColor(color)
+      .setVisible(true);
+    this.selectionStatusUntil = time + 1800;
   }
 }
 

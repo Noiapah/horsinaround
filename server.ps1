@@ -70,7 +70,7 @@ function Resolve-RequestPath([string]$RequestTarget) {
 }
 
 if ($SelfTest) {
-  $runtimeFrame = Join-Path $root "public\assets\horse\animation\horse-n-idle.png"
+  $runtimeFrame = Join-Path $root "public\assets\horse\animation\horse-chestnut-sheet.png"
   $outsidePath = [System.IO.Path]::GetFullPath(
     (Join-Path $root "..\horsin-around-game-secret\probe.txt")
   )
