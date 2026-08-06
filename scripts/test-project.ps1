@@ -93,6 +93,19 @@ for ($index = 0; $index -lt $sourcePalette.Count; $index += 1) {
   $sourcePaletteIndexes[$sourceArgb] = $index
 }
 $transparentArgb = [System.Drawing.Color]::FromArgb(0, 0, 0, 0).ToArgb()
+$palominoMixedSourceArgb = [System.Drawing.Color]::FromArgb(
+  255,
+  59,
+  47,
+  38
+).ToArgb()
+$palominoEdgeArgb = [System.Drawing.Color]::FromArgb(
+  255,
+  95,
+  62,
+  28
+).ToArgb()
+$palominoCreamArgb = $skinPalettes["palomino"][5].ToArgb()
 
 foreach ($frame in $canonicalFrames) {
   $image = [System.Drawing.Bitmap]::FromFile($frame.Path)
@@ -152,6 +165,9 @@ foreach ($skinId in $skinPalettes.Keys) {
 
   $sheetPath = Join-Path $animationRoot "horse-$skinId-sheet.png"
   $sheet = [System.Drawing.Bitmap]::FromFile($sheetPath)
+  $palominoEdgePixels = 0
+  $palominoInteriorCreamPixels = 0
+  $palominoCreamBoundaryPixels = 0
   try {
     if ($sheet.Width -ne 640 -or $sheet.Height -ne 1024) {
       throw "Horse skin sheet must be 640x1024: $sheetPath"
@@ -173,16 +189,53 @@ foreach ($skinId in $skinPalettes.Keys) {
           for ($x = 0; $x -lt 128; $x += 1) {
             $sourcePixel = $sourceImage.GetPixel($x, $y)
             $sourceArgb = $sourcePixel.ToArgb()
+            $actualArgb = $sheet.GetPixel(
+              ($column * 128) + $x,
+              ($row * 128) + $y
+            ).ToArgb()
             if ($sourcePixel.A -eq 0) {
               $expectedArgb = $transparentArgb
             } else {
               $paletteIndex = $sourcePaletteIndexes[$sourceArgb]
               $expectedArgb = $targetPalette[$paletteIndex].ToArgb()
+              if (
+                $skinId -eq "palomino" -and
+                $sourceArgb -eq $palominoMixedSourceArgb
+              ) {
+                if ($actualArgb -eq $palominoEdgeArgb) {
+                  $palominoEdgePixels += 1
+                  $expectedArgb = $palominoEdgeArgb
+                } elseif ($actualArgb -eq $palominoCreamArgb) {
+                  $palominoInteriorCreamPixels += 1
+                }
+              }
             }
-            $actualArgb = $sheet.GetPixel(
-              ($column * 128) + $x,
-              ($row * 128) + $y
-            ).ToArgb()
+            if (
+              $skinId -eq "palomino" -and
+              $actualArgb -eq $palominoCreamArgb
+            ) {
+              $pixelNeighbors = @(
+                [pscustomobject]@{ X = $x - 1; Y = $y },
+                [pscustomobject]@{ X = $x + 1; Y = $y },
+                [pscustomobject]@{ X = $x; Y = $y - 1 },
+                [pscustomobject]@{ X = $x; Y = $y + 1 }
+              )
+              foreach ($neighbor in $pixelNeighbors) {
+                if (
+                  $neighbor.X -lt 0 -or
+                  $neighbor.X -ge 128 -or
+                  $neighbor.Y -lt 0 -or
+                  $neighbor.Y -ge 128 -or
+                  $sheet.GetPixel(
+                    ($column * 128) + $neighbor.X,
+                    ($row * 128) + $neighbor.Y
+                  ).A -eq 0
+                ) {
+                  $palominoCreamBoundaryPixels += 1
+                  break
+                }
+              }
+            }
             if ($actualArgb -ne $expectedArgb) {
               throw (
                 "Horse skin pixel mismatch for $skinId/$($frame.Name) " +
@@ -194,6 +247,16 @@ foreach ($skinId in $skinPalettes.Keys) {
       } finally {
         $sourceImage.Dispose()
       }
+    }
+    if (
+      $skinId -eq "palomino" -and
+      (
+        $palominoEdgePixels -eq 0 -or
+        $palominoInteriorCreamPixels -eq 0 -or
+        $palominoCreamBoundaryPixels -ne 0
+      )
+    ) {
+      throw "Palomino must retain cream fill and a stable dark silhouette."
     }
   } finally {
     $sheet.Dispose()
@@ -224,4 +287,4 @@ if ($phaserSource -notmatch "3\.90\.0") {
   throw "Unexpected Phaser runtime version."
 }
 
-Write-Output "Project checks passed: server paths, 40 canonical frames, 3 exact horse skin sheets, sources, and Phaser runtime."
+Write-Output "Project checks passed: server paths, 40 canonical frames, 3 validated horse skin sheets, stable Palomino outlines, sources, and Phaser runtime."

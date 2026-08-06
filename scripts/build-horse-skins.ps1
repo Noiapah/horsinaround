@@ -58,6 +58,93 @@ function Convert-ToColor([string]$value) {
   )
 }
 
+function Test-LogicalBlockTouchesTransparency(
+  [System.Drawing.Bitmap]$image,
+  [int]$blockX,
+  [int]$blockY
+) {
+  $neighbors = @(
+    [pscustomobject]@{ X = $blockX - 4; Y = $blockY },
+    [pscustomobject]@{ X = $blockX + 4; Y = $blockY },
+    [pscustomobject]@{ X = $blockX; Y = $blockY - 4 },
+    [pscustomobject]@{ X = $blockX; Y = $blockY + 4 }
+  )
+  foreach ($neighbor in $neighbors) {
+    $x = $neighbor.X
+    $y = $neighbor.Y
+    if (
+      $x -lt 0 -or
+      $x -ge $image.Width -or
+      $y -lt 0 -or
+      $y -ge $image.Height
+    ) {
+      return $true
+    }
+    if ($image.GetPixel($x, $y).A -eq 0) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Repair-PalominoSilhouette(
+  [System.Drawing.Bitmap]$sheet,
+  [string]$animationRoot,
+  [string[]]$directions
+) {
+  # The source's neutral mane shade also serves as a moving-leg outline.
+  # Keep it cream inside the horse, but use the dark coat shade for exposed
+  # 4x4 edge blocks so walking frames do not flash a cream fringe.
+  $mixedSourceColor = Convert-ToColor "59,47,38"
+  $edgeColor = Convert-ToColor "95,62,28"
+
+  for ($row = 0; $row -lt $directions.Count; $row += 1) {
+    $direction = $directions[$row]
+    $frameNames = @(
+      "horse-$direction-idle.png",
+      "horse-$direction-walk-0.png",
+      "horse-$direction-walk-1.png",
+      "horse-$direction-walk-2.png",
+      "horse-$direction-walk-3.png"
+    )
+    for ($column = 0; $column -lt $frameNames.Count; $column += 1) {
+      $framePath = Join-Path $animationRoot $frameNames[$column]
+      $sourceImage = [System.Drawing.Bitmap]::FromFile($framePath)
+      try {
+        for ($blockY = 0; $blockY -lt 128; $blockY += 4) {
+          for ($blockX = 0; $blockX -lt 128; $blockX += 4) {
+            if (
+              $sourceImage.GetPixel($blockX, $blockY).ToArgb() -ne
+              $mixedSourceColor.ToArgb()
+            ) {
+              continue
+            }
+            $touchesTransparency = Test-LogicalBlockTouchesTransparency `
+              -image $sourceImage `
+              -blockX $blockX `
+              -blockY $blockY
+            if (-not $touchesTransparency) {
+              continue
+            }
+
+            for ($y = 0; $y -lt 4; $y += 1) {
+              for ($x = 0; $x -lt 4; $x += 1) {
+                $sheet.SetPixel(
+                  ($column * 128) + $blockX + $x,
+                  ($row * 128) + $blockY + $y,
+                  $edgeColor
+                )
+              }
+            }
+          }
+        }
+      } finally {
+        $sourceImage.Dispose()
+      }
+    }
+  }
+}
+
 foreach ($skinId in $skinPalettes.Keys) {
   $targetPalette = $skinPalettes[$skinId]
   if ($targetPalette.Count -ne $sourcePalette.Count) {
@@ -138,6 +225,10 @@ foreach ($skinId in $skinPalettes.Keys) {
       }
     } finally {
       $graphics.Dispose()
+    }
+
+    if ($skinId -eq "palomino") {
+      Repair-PalominoSilhouette $sheet $animationRoot $directions
     }
 
     $outputPath = Join-Path $animationRoot "horse-$skinId-sheet.png"
