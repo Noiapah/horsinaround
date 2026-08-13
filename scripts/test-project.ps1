@@ -7,6 +7,7 @@ $sourceRoot = Join-Path $projectRoot "public\assets\horse\source"
 $palominoMaskPath = Join-Path $sourceRoot "palomino-flaxen-mask.png"
 
 & (Join-Path $projectRoot "server.ps1") -SelfTest
+& (Join-Path $PSScriptRoot "test-game-core.ps1")
 
 Add-Type -AssemblyName System.Drawing
 

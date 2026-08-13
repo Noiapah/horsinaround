@@ -190,6 +190,12 @@ try {
         $stream.Write($body, 0, $body.Length)
       }
       $stream.Flush()
+    } catch [System.IO.IOException] {
+      # A browser may abandon a speculative connection before sending a
+      # complete request. Keep the development server available for the next
+      # client instead of terminating its accept loop.
+    } catch [System.Net.Sockets.SocketException] {
+      # Treat client disconnects as request-local failures.
     } finally {
       $client.Close()
     }

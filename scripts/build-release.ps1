@@ -9,6 +9,8 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
   $OutputDirectory = $releaseRoot
 }
 
+& (Join-Path $PSScriptRoot "test-project.ps1")
+
 $releaseRootPath = [System.IO.Path]::GetFullPath($releaseRoot)
 $outputPath = [System.IO.Path]::GetFullPath($OutputDirectory)
 $releasePrefix =
@@ -82,6 +84,8 @@ New-Item -ItemType Directory -Force -Path @(
 Copy-Item -LiteralPath (Join-Path $projectRoot "index.html") `
   -Destination $outputPath
 Copy-Item -LiteralPath (Join-Path $projectRoot "src\game.js") `
+  -Destination $sourceOutput
+Copy-Item -LiteralPath (Join-Path $projectRoot "src\game-core.js") `
   -Destination $sourceOutput
 Copy-Item -LiteralPath (Join-Path $projectRoot "src\styles.css") `
   -Destination $sourceOutput

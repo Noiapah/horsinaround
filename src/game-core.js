@@ -1,0 +1,91 @@
+export const GALLOP_CHARGE_MS = 4500;
+
+export function resolveGaitState({
+  isMoving,
+  walkHeld,
+  runHeld,
+  gallopCharge,
+  delta,
+}) {
+  if (!isMoving) {
+    return { gait: "idle", gallopCharge: 0 };
+  }
+  if (walkHeld) {
+    return { gait: "walk", gallopCharge: 0 };
+  }
+  if (runHeld) {
+    const nextCharge = Math.min(
+      gallopCharge + delta,
+      GALLOP_CHARGE_MS,
+    );
+    return {
+      gait: nextCharge >= GALLOP_CHARGE_MS ? "gallop" : "canter",
+      gallopCharge: nextCharge,
+    };
+  }
+  return { gait: "trot", gallopCharge: 0 };
+}
+
+export function getHorseFacingDirection(horizontal, vertical) {
+  if (vertical < 0) {
+    if (horizontal < 0) return "nw";
+    if (horizontal > 0) return "ne";
+    return "n";
+  }
+  if (vertical > 0) {
+    if (horizontal < 0) return "sw";
+    if (horizontal > 0) return "se";
+    return "s";
+  }
+  return horizontal < 0 ? "w" : "e";
+}
+
+export function getHorseColliderGeometry(facing) {
+  if (facing === "e" || facing === "w") {
+    return { width: 84, height: 38, offsetX: 22, offsetY: 45 };
+  }
+  if (facing.length === 2) {
+    return { width: 66, height: 66, offsetX: 31, offsetY: 31 };
+  }
+  return { width: 38, height: 84, offsetX: 45, offsetY: 22 };
+}
+
+export function mergeProgressRecords(localRecords = {}, storedRecords = {}) {
+  const merged = { ...storedRecords, ...localRecords };
+  const keys = new Set([
+    ...Object.keys(storedRecords),
+    ...Object.keys(localRecords),
+  ]);
+
+  for (const key of keys) {
+    if (!/best.*ms$/i.test(key)) continue;
+    const candidates = [
+      Number(storedRecords[key]),
+      Number(localRecords[key]),
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    if (candidates.length > 0) {
+      merged[key] = Math.min(...candidates);
+    }
+  }
+  return merged;
+}
+
+export function reconcileStoredProgress(progress, storedProgress) {
+  const storedIsNewer = storedProgress.revision > progress.revision;
+  if (storedIsNewer) {
+    // Durable account state belongs to the newest lease owner. In particular,
+    // adopting lives prevents a stale tab from undoing damage or healing.
+    progress.lives = storedProgress.lives;
+    progress.coins = storedProgress.coins;
+    progress.selectedHorseSkinId = storedProgress.selectedHorseSkinId;
+  }
+  progress.revision = Math.max(
+    progress.revision,
+    storedProgress.revision,
+  );
+  progress.records = mergeProgressRecords(
+    progress.records,
+    storedProgress.records,
+  );
+  return progress;
+}

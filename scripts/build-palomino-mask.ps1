@@ -403,6 +403,64 @@ try {
         $frame.Dispose()
       }
     }
+
+    # Cells occupied by the same body color throughout the walk cycle are
+    # stable anatomy. Keep their semantic role stable as well so the flaxen
+    # palette cannot flicker as the legs animate around them.
+    $walkFrames = [System.Collections.Generic.List[System.Drawing.Bitmap]]::new()
+    try {
+      for ($poseIndex = 1; $poseIndex -lt $poses.Count; $poseIndex += 1) {
+        $walkFrames.Add(
+          [System.Drawing.Bitmap]::FromFile(
+            (Join-Path $animationRoot "horse-$direction-$($poses[$poseIndex]).png")
+          )
+        )
+      }
+      for ($logicalY = 0; $logicalY -lt 32; $logicalY += 1) {
+        for ($logicalX = 0; $logicalX -lt 32; $logicalX += 1) {
+          $bodyColors = @(
+            foreach ($walkFrame in $walkFrames) {
+              $walkFrame.GetPixel($logicalX * 4, $logicalY * 4).ToArgb()
+            }
+          )
+          if (@(
+            $bodyColors | Where-Object {
+              $_ -eq $transparent.ToArgb() -or
+              $_ -eq $outlineArgb -or
+              $_ -eq $eyeArgb
+            }
+          ).Count -gt 0) {
+            continue
+          }
+
+          $semanticValues = @(
+            for ($poseIndex = 1; $poseIndex -lt $poses.Count; $poseIndex += 1) {
+              $mask.GetPixel(
+                ($poseIndex * 32) + $logicalX,
+                ($directionIndex * 32) + $logicalY
+              ).ToArgb()
+            }
+          )
+          $stableSemantic = @(
+            $semanticValues |
+              Group-Object |
+              Sort-Object Count -Descending |
+              Select-Object -First 1
+          )[0].Name
+          for ($poseIndex = 1; $poseIndex -lt $poses.Count; $poseIndex += 1) {
+            $mask.SetPixel(
+              ($poseIndex * 32) + $logicalX,
+              ($directionIndex * 32) + $logicalY,
+              [System.Drawing.Color]::FromArgb([int]$stableSemantic)
+            )
+          }
+        }
+      }
+    } finally {
+      foreach ($walkFrame in $walkFrames) {
+        $walkFrame.Dispose()
+      }
+    }
   }
 
   for ($y = 0; $y -lt $mask.Height; $y += 1) {

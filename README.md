@@ -164,6 +164,11 @@ Run the portable server and asset checks:
 ./scripts/test-project.ps1
 ```
 
+The checks also run dependency-free gameplay-logic tests and launch an
+installed Chrome or Edge browser in headless mode for a Phaser startup smoke
+test. They cover gait transitions, facing and collider rules, save conflict
+reconciliation, asset integrity, server path handling, and module startup.
+
 Rebuild all 40 runtime animation frames from the checked-in source sheets:
 
 ```powershell
@@ -216,7 +221,9 @@ will require an authenticated API and persistent database in a later phase.
 ## Project layout
 
 - `index.html` — browser entry point.
-- `src/game.js` — gameplay, progress model, world generation, and Phaser scenes.
+- `src/game.js` — progress model, world generation, and Phaser scenes.
+- `src/game-core.js` — testable gait, facing, collider, and save-merging rules.
+- `src/game-core.test.js` — dependency-free browser tests for core rules.
 - `src/styles.css` — full-window game presentation.
 - `server.ps1` — restricted loopback development server.
 - `public/assets/horse/animation/` — 40 canonical frames plus the generated
@@ -229,5 +236,6 @@ will require an authenticated API and persistent database in a later phase.
 - `scripts/build-palomino-mask.ps1` — deterministic Palomino semantic-atlas
   builder.
 - `scripts/test-project.ps1` — server and runtime-asset validation.
+- `scripts/test-game-core.ps1` — browser logic tests and startup smoke test.
 - `scripts/build-release.ps1` — static deployment packager.
 - `vendor/phaser.min.js` — pinned local Phaser runtime.

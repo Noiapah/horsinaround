@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Game core tests</title>
+  </head>
+  <body>
+    <pre id="result" data-status="running">Game core tests are running.</pre>
+    <script type="module">
+      const result = document.querySelector("#result");
+      try {
+        const { runGameCoreTests } = await import("./game-core.test.js");
+        const count = runGameCoreTests();
+        result.dataset.status = "passed";
+        result.textContent = `${count} game core tests passed.`;
+      } catch (error) {
+        result.dataset.status = "failed";
+        result.textContent = error?.stack ?? String(error);
+      }
+    </script>
+  </body>
+</html>

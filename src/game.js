@@ -1,3 +1,11 @@
+import {
+  GALLOP_CHARGE_MS,
+  getHorseColliderGeometry,
+  getHorseFacingDirection,
+  reconcileStoredProgress,
+  resolveGaitState,
+} from "./game-core.js";
+
 const WORLD_WIDTH = 8000;
 const WORLD_HEIGHT = 6000;
 const START_X = WORLD_WIDTH / 2;
@@ -42,7 +50,6 @@ const HORSE_SKINS = [
 const HORSE_SKIN_BY_ID = new Map(
   HORSE_SKINS.map((skin) => [skin.id, skin]),
 );
-const GALLOP_CHARGE_MS = 4500;
 const TRACK_LOGICAL_WIDTH = 2800;
 const TRACK_LOGICAL_HEIGHT = 1100;
 const TRACK_SCALE_X = 2;
@@ -129,32 +136,6 @@ function setHorseSpriteTexture(
   const texture = getHorseTextureSpec(skinId, direction, movementFrame);
   sprite.setTexture(texture.key, texture.frame);
   return sprite;
-}
-
-function resolveGaitState({
-  isMoving,
-  walkHeld,
-  runHeld,
-  gallopCharge,
-  delta,
-}) {
-  if (!isMoving) {
-    return { gait: "idle", gallopCharge: 0 };
-  }
-  if (walkHeld) {
-    return { gait: "walk", gallopCharge: 0 };
-  }
-  if (runHeld) {
-    const nextCharge = Math.min(
-      gallopCharge + delta,
-      GALLOP_CHARGE_MS,
-    );
-    return {
-      gait: nextCharge >= GALLOP_CHARGE_MS ? "gallop" : "canter",
-      gallopCharge: nextCharge,
-    };
-  }
-  return { gait: "trot", gallopCharge: 0 };
 }
 
 function resetKeys(keys, names) {
@@ -571,44 +552,6 @@ class HorseProgress {
   }
 }
 
-function mergeProgressRecords(localRecords = {}, storedRecords = {}) {
-  const merged = { ...storedRecords, ...localRecords };
-  const keys = new Set([
-    ...Object.keys(storedRecords),
-    ...Object.keys(localRecords),
-  ]);
-
-  for (const key of keys) {
-    if (!/best.*ms$/i.test(key)) continue;
-    const candidates = [
-      Number(storedRecords[key]),
-      Number(localRecords[key]),
-    ].filter((value) => Number.isFinite(value) && value > 0);
-    if (candidates.length > 0) {
-      merged[key] = Math.min(...candidates);
-    }
-  }
-  return merged;
-}
-
-function reconcileStoredProgress(progress, storedProgress) {
-  const storedIsNewer = storedProgress.revision > progress.revision;
-  if (storedIsNewer) {
-    // A newer lease owner may have spent coins. Never resurrect that stale
-    // balance when this tab later takes over saving.
-    progress.coins = storedProgress.coins;
-    progress.selectedHorseSkinId = storedProgress.selectedHorseSkinId;
-  }
-  progress.revision = Math.max(
-    progress.revision,
-    storedProgress.revision,
-  );
-  progress.records = mergeProgressRecords(
-    progress.records,
-    storedProgress.records,
-  );
-}
-
 class LocalProgressStore {
   constructor() {
     this.sessionId =
@@ -829,6 +772,31 @@ class ProgressScene extends Phaser.Scene {
 
   resetHorseControls() {
     resetKeys(this.keys, HORSE_CONTROL_NAMES);
+  }
+
+  getFacingDirection(horizontal, vertical) {
+    return getHorseFacingDirection(horizontal, vertical);
+  }
+
+  setHorseCollider(facing) {
+    const geometry = getHorseColliderGeometry(facing);
+    this.horse.body.setSize(geometry.width, geometry.height);
+    this.horse.body.setOffset(geometry.offsetX, geometry.offsetY);
+  }
+
+  advanceHorseAnimation(gait, delta) {
+    const frameDuration = 1000 / gait.animationFps;
+    this.animationAccumulator += delta;
+    while (this.animationAccumulator >= frameDuration) {
+      this.animationAccumulator -= frameDuration;
+      this.movementFrame = (this.movementFrame + 1) % 4;
+    }
+    setHorseSpriteTexture(
+      this.horse,
+      this.progress.selectedHorseSkinId,
+      this.currentFacing,
+      this.movementFrame,
+    );
   }
 
   createHorseHud(offsetX = 0, offsetY = 0, showMinimap = true) {
@@ -1607,22 +1575,9 @@ class MeadowScene extends ProgressScene {
   }
 
   updateHorseAnimation(gait, delta) {
-    const frameDuration = 1000 / gait.animationFps;
-    this.animationAccumulator += delta;
-
-    while (this.animationAccumulator >= frameDuration) {
-      this.animationAccumulator -= frameDuration;
-      this.movementFrame = (this.movementFrame + 1) % 4;
-    }
-
     this.horse.setScale(1);
     this.horse.setAngle(0);
-    setHorseSpriteTexture(
-      this.horse,
-      this.progress.selectedHorseSkinId,
-      this.currentFacing,
-      this.movementFrame,
-    );
+    this.advanceHorseAnimation(gait, delta);
 
     const liftByFrame = [0.12, 0, 0.08, 0.04];
     const lift = liftByFrame[this.movementFrame];
@@ -1950,39 +1905,6 @@ class MeadowScene extends ProgressScene {
     });
     this.gallopCharge = state.gallopCharge;
     return state.gait;
-  }
-
-  getFacingDirection(horizontal, vertical) {
-    if (vertical < 0) {
-      if (horizontal < 0) return "nw";
-      if (horizontal > 0) return "ne";
-      return "n";
-    }
-
-    if (vertical > 0) {
-      if (horizontal < 0) return "sw";
-      if (horizontal > 0) return "se";
-      return "s";
-    }
-
-    return horizontal < 0 ? "w" : "e";
-  }
-
-  setHorseCollider(facing) {
-    if (facing === "e" || facing === "w") {
-      this.horse.body.setSize(84, 38);
-      this.horse.body.setOffset(22, 45);
-      return;
-    }
-
-    if (facing.length === 2) {
-      this.horse.body.setSize(66, 66);
-      this.horse.body.setOffset(31, 31);
-      return;
-    }
-
-    this.horse.body.setSize(38, 84);
-    this.horse.body.setOffset(45, 22);
   }
 
   createObstacleTextures() {
@@ -2482,18 +2404,7 @@ class BaseInteriorScene extends ProgressScene {
       );
       this.currentFacing = this.getFacingDirection(horizontal, vertical);
       this.setHorseCollider(this.currentFacing);
-      this.animationAccumulator += delta;
-      const frameDuration = 1000 / gait.animationFps;
-      while (this.animationAccumulator >= frameDuration) {
-        this.animationAccumulator -= frameDuration;
-        this.movementFrame = (this.movementFrame + 1) % 4;
-      }
-      setHorseSpriteTexture(
-        this.horse,
-        this.progress.selectedHorseSkinId,
-        this.currentFacing,
-        this.movementFrame,
-      );
+      this.advanceHorseAnimation(gait, delta);
       this.emitDust(direction, gait, delta);
     } else {
       this.horse.setVelocity(0, 0);
@@ -2678,33 +2589,6 @@ class BaseInteriorScene extends ProgressScene {
         returnFromFacility: this.facility.id,
       });
     });
-  }
-
-  getFacingDirection(horizontal, vertical) {
-    if (vertical < 0) {
-      if (horizontal < 0) return "nw";
-      if (horizontal > 0) return "ne";
-      return "n";
-    }
-    if (vertical > 0) {
-      if (horizontal < 0) return "sw";
-      if (horizontal > 0) return "se";
-      return "s";
-    }
-    return horizontal < 0 ? "w" : "e";
-  }
-
-  setHorseCollider(facing) {
-    if (facing === "e" || facing === "w") {
-      this.horse.body.setSize(84, 38);
-      this.horse.body.setOffset(22, 45);
-    } else if (facing.length === 2) {
-      this.horse.body.setSize(66, 66);
-      this.horse.body.setOffset(31, 31);
-    } else {
-      this.horse.body.setSize(38, 84);
-      this.horse.body.setOffset(45, 22);
-    }
   }
 
   buildInterior() {}
