@@ -2830,42 +2830,139 @@ class HospitalInteriorScene extends BaseInteriorScene {
   buildInterior() {
     this.exitPoint = { x: 480, y: 590 };
     const room = this.add.graphics().setDepth(0);
-    room.fillStyle(0x9ba7a0);
+    const wallThickness = 28;
+    const doorwayWidth = 120;
+
+    // A dark shell makes the physics boundary readable. The bottom doorway is
+    // still bounded by the scene edge, but its threshold clearly marks where
+    // the player enters and exits.
+    room.fillStyle(0x33464a);
     room.fillRect(0, 0, this.interiorWidth, this.interiorHeight);
+    room.fillStyle(0xd9e3dc);
+    room.fillRect(
+      wallThickness,
+      wallThickness,
+      this.interiorWidth - wallThickness * 2,
+      this.interiorHeight - wallThickness * 2,
+    );
+
     const tileSize = 32;
-    for (let y = 28; y < this.interiorHeight - 28; y += tileSize) {
-      for (let x = 28; x < this.interiorWidth - 28; x += tileSize) {
+    for (
+      let y = wallThickness;
+      y < this.interiorHeight - wallThickness;
+      y += tileSize
+    ) {
+      for (
+        let x = wallThickness;
+        x < this.interiorWidth - wallThickness;
+        x += tileSize
+      ) {
         room.fillStyle(
-          ((x + y) / tileSize) % 2 === 0 ? 0xe7e5d5 : 0xc9d7d0,
+          ((x + y) / tileSize) % 2 === 0 ? 0xe8eee7 : 0xd4dfd8,
         );
-        room.fillRect(x, y, tileSize, tileSize);
+        room.fillRect(
+          x,
+          y,
+          Math.min(tileSize, this.interiorWidth - wallThickness - x),
+          Math.min(tileSize, this.interiorHeight - wallThickness - y),
+        );
       }
     }
 
+    // Keep a broad central aisle readable from the entrance to reception.
+    room.fillStyle(0xb8d3ca, 0.52);
+    room.fillRect(380, 190, 200, 422);
+    room.lineStyle(3, 0x7da79d, 0.8);
+    room.strokeRect(380, 190, 200, 422);
+
+    const drawBed = (x, y, accentColor) => {
+      const width = 168;
+      const height = 88;
+      const left = x - width / 2;
+      const top = y - height / 2;
+
+      // The outer frame exactly matches the collision rectangle below.
+      room.fillStyle(0x344e58);
+      room.fillRect(left, top, width, height);
+      room.fillStyle(0xf4f1df);
+      room.fillRect(left + 8, top + 8, width - 16, height - 16);
+      room.fillStyle(accentColor);
+      room.fillRect(left + 14, top + 14, 50, height - 28);
+      room.fillStyle(0xffffff, 0.55);
+      room.fillRect(left + 72, top + 18, width - 92, 8);
+      room.fillStyle(0x78979b);
+      room.fillRect(left + 12, top + height - 8, 16, 8);
+      room.fillRect(left + width - 28, top + height - 8, 16, 8);
+      this.addCollisionRect(x, y, width, height);
+    };
+
     const beds = [
-      [170, 160],
-      [170, 340],
-      [790, 160],
-      [790, 340],
+      [154, 180, 0x85c5c8],
+      [154, 390, 0xe0b36e],
+      [806, 180, 0x85c5c8],
+      [806, 390, 0xe0b36e],
     ];
-    for (const [x, y] of beds) {
-      room.fillStyle(0x3f5963);
-      room.fillRect(x - 76, y - 42, 152, 84);
-      room.fillStyle(0xf2eed8);
-      room.fillRect(x - 66, y - 32, 132, 64);
-      room.fillStyle(0x8dc2c8);
-      room.fillRect(x - 58, y - 24, 46, 48);
-      this.addCollisionRect(x, y, 152, 84);
+    for (const [x, y, accentColor] of beds) {
+      drawBed(x, y, accentColor);
     }
 
+    // Wall-mounted medical cross: decoration only, visually separated from
+    // the solid reception counter beneath it.
     room.fillStyle(0xd74747);
-    room.fillRect(456, 84, 48, 116);
-    room.fillRect(422, 118, 116, 48);
-    room.fillStyle(0x324047);
-    room.fillRect(360, 232, 240, 58);
-    this.addCollisionRect(480, 261, 240, 58);
-    room.fillStyle(0x2d3432);
-    room.fillRect(420, 600, 120, 40);
+    room.fillRect(462, 48, 36, 104);
+    room.fillRect(428, 82, 104, 36);
+    room.fillStyle(0xffffff, 0.38);
+    room.fillRect(470, 56, 10, 52);
+
+    const counter = { x: 480, y: 174, width: 236, height: 64 };
+    room.fillStyle(0x31494f);
+    room.fillRect(
+      counter.x - counter.width / 2,
+      counter.y - counter.height / 2,
+      counter.width,
+      counter.height,
+    );
+    room.fillStyle(0x88aaa4);
+    room.fillRect(
+      counter.x - counter.width / 2 + 8,
+      counter.y - counter.height / 2 + 8,
+      counter.width - 16,
+      12,
+    );
+    room.fillStyle(0x20363b);
+    room.fillRect(counter.x - 28, counter.y - 14, 56, 32);
+    room.fillStyle(0xb8e0d5);
+    room.fillRect(counter.x - 20, counter.y - 8, 40, 16);
+    this.addCollisionRect(
+      counter.x,
+      counter.y,
+      counter.width,
+      counter.height,
+    );
+
+    room.fillStyle(0x5f8e82, 0.7);
+    room.fillRect(300, 516, 360, 4);
+    room.fillStyle(0x426d64);
+    room.fillTriangle(470, 542, 490, 542, 480, 558);
+
+    const doorwayLeft = (this.interiorWidth - doorwayWidth) / 2;
+    room.fillStyle(0x20363b);
+    room.fillRect(doorwayLeft, 598, doorwayWidth, 42);
+    room.fillStyle(0xf0d68a);
+    room.fillRect(doorwayLeft + 8, 598, doorwayWidth - 16, 8);
+    room.lineStyle(3, 0xf7e8ae, 1);
+    room.strokeRect(doorwayLeft + 8, 586, doorwayWidth - 16, 24);
+
+    this.add
+      .text(480, 238, "TREATMENT", {
+        fontFamily: '"Courier New", monospace',
+        fontSize: "12px",
+        fontStyle: "bold",
+        color: "#426d64",
+        resolution: 2,
+      })
+      .setOrigin(0.5)
+      .setDepth(2);
   }
 
   onFacilityEntered() {
