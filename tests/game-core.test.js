@@ -5,7 +5,7 @@ import {
   mergeProgressRecords,
   reconcileStoredProgress,
   resolveGaitState,
-} from "./game-core.js";
+} from "../src/game-core.js";
 
 export function runGameCoreTests() {
   let assertions = 0;

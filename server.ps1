@@ -7,6 +7,7 @@ $root = (Resolve-Path $PSScriptRoot).Path
 $indexPath = Join-Path $root "index.html"
 $allowedDirectories = @(
   (Join-Path $root "src"),
+  (Join-Path $root "tests"),
   (Join-Path $root "vendor"),
   (Join-Path $root "public\assets\horse\animation")
 )
@@ -71,6 +72,7 @@ function Resolve-RequestPath([string]$RequestTarget) {
 
 if ($SelfTest) {
   $runtimeFrame = Join-Path $root "public\assets\horse\animation\horse-chestnut-sheet.png"
+  $gameCoreTest = Join-Path $root "tests\game-core.test.html"
   $outsidePath = [System.IO.Path]::GetFullPath(
     (Join-Path $root "..\horsin-around-game-secret\probe.txt")
   )
@@ -80,6 +82,7 @@ if ($SelfTest) {
   $checks = @(
     (Test-IsAllowedFile $indexPath),
     (Test-IsAllowedFile $runtimeFrame),
+    (Test-IsAllowedFile $gameCoreTest),
     (-not (Test-IsAllowedFile (Join-Path $root "server.ps1"))),
     (-not (Test-IsAllowedFile (Join-Path $root ".git\config"))),
     (-not (Test-IsAllowedFile $outsidePath)),

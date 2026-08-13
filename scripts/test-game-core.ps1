@@ -28,6 +28,28 @@ $profilePath = Join-Path (
   [System.IO.Path]::GetTempPath()
 ) "horsin-around-browser-test-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $profilePath | Out-Null
+
+function Invoke-HeadlessBrowser([string]$Url) {
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $browserOutput = & $browserPath `
+      "--headless=new" `
+      "--disable-gpu" `
+      "--virtual-time-budget=5000" `
+      "--user-data-dir=$profilePath" `
+      "--dump-dom" `
+      $Url 2>&1 | Out-String
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  return [pscustomobject]@{
+    ExitCode = $exitCode
+    Output = $browserOutput
+  }
+}
+
 $server = $null
 try {
   $serverOutputPath = Join-Path $profilePath "server-output.txt"
@@ -44,6 +66,7 @@ try {
     if ($server.HasExited) {
       throw "The browser-test server exited with code $($server.ExitCode)."
     }
+    $probe = $null
     try {
       $probe = [System.Net.Sockets.TcpClient]::new()
       $probe.ReceiveTimeout = 1000
@@ -60,7 +83,6 @@ try {
         0,
         $responseBuffer.Length
       )
-      $probe.Dispose()
       $responseStart = [System.Text.Encoding]::ASCII.GetString(
         $responseBuffer,
         0,
@@ -73,6 +95,10 @@ try {
       break
     } catch {
       Start-Sleep -Milliseconds 100
+    } finally {
+      if ($null -ne $probe) {
+        $probe.Dispose()
+      }
     }
   }
   if (-not $ready) {
@@ -81,41 +107,26 @@ try {
     throw "The browser-test server did not start.`n$serverOutput`n$serverError"
   }
 
-  $url = "http://localhost:$port/src/game-core.test.html"
-  $ErrorActionPreference = "Continue"
-  try {
-    $output = & $browserPath `
-      "--headless=new" `
-      "--disable-gpu" `
-      "--virtual-time-budget=5000" `
-      "--user-data-dir=$profilePath" `
-      "--dump-dom" `
-      $url 2>&1 | Out-String
-    $browserExitCode = $LASTEXITCODE
-  } finally {
-    $ErrorActionPreference = "Stop"
+  $coreTest = Invoke-HeadlessBrowser `
+    "http://localhost:$port/tests/game-core.test.html"
+  if (
+    $coreTest.ExitCode -ne 0 -or
+    $coreTest.Output -notmatch 'data-status="passed"'
+  ) {
+    throw "Game core browser tests failed.`n$($coreTest.Output)"
   }
-  if ($browserExitCode -ne 0 -or $output -notmatch 'data-status="passed"') {
-    throw "Game core browser tests failed.`n$output"
-  }
-  $result = [regex]::Match($output, "\d+ game core tests passed\.").Value
+  $result = [regex]::Match(
+    $coreTest.Output,
+    "\d+ game core tests passed\."
+  ).Value
   Write-Output $result
 
-  $ErrorActionPreference = "Continue"
-  try {
-    $gameOutput = & $browserPath `
-      "--headless=new" `
-      "--disable-gpu" `
-      "--virtual-time-budget=5000" `
-      "--user-data-dir=$profilePath" `
-      "--dump-dom" `
-      "http://localhost:$port/" 2>&1 | Out-String
-    $gameExitCode = $LASTEXITCODE
-  } finally {
-    $ErrorActionPreference = "Stop"
-  }
-  if ($gameExitCode -ne 0 -or $gameOutput -notmatch "<canvas") {
-    throw "Game startup smoke test failed.`n$gameOutput"
+  $gameSmokeTest = Invoke-HeadlessBrowser "http://localhost:$port/"
+  if (
+    $gameSmokeTest.ExitCode -ne 0 -or
+    $gameSmokeTest.Output -notmatch "<canvas"
+  ) {
+    throw "Game startup smoke test failed.`n$($gameSmokeTest.Output)"
   }
   Write-Output "Game startup smoke test passed."
 } finally {

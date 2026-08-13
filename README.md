@@ -223,7 +223,7 @@ will require an authenticated API and persistent database in a later phase.
 - `index.html` — browser entry point.
 - `src/game.js` — progress model, world generation, and Phaser scenes.
 - `src/game-core.js` — testable gait, facing, collider, and save-merging rules.
-- `src/game-core.test.js` — dependency-free browser tests for core rules.
+- `tests/game-core.test.js` — dependency-free browser tests for core rules.
 - `src/styles.css` — full-window game presentation.
 - `server.ps1` — restricted loopback development server.
 - `public/assets/horse/animation/` — 40 canonical frames plus the generated

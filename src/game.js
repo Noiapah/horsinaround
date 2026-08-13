@@ -774,6 +774,28 @@ class ProgressScene extends Phaser.Scene {
     resetKeys(this.keys, HORSE_CONTROL_NAMES);
   }
 
+  resetHorseMotionState(facing, jumpCooldownUntil = 0) {
+    this.horse.setVelocity(0, 0);
+    setHorseSpriteTexture(
+      this.horse,
+      this.progress.selectedHorseSkinId,
+      facing,
+    );
+    this.horse.setDisplayOrigin(64, 64);
+    this.horse.setScale(1);
+    this.horse.setAngle(0);
+    this.horse.clearTint();
+    this.currentFacing = facing;
+    this.currentGait = "idle";
+    this.gallopCharge = 0;
+    this.movementFrame = 0;
+    this.animationAccumulator = 0;
+    this.dustTimer = 0;
+    resetHorseJump(this, jumpCooldownUntil);
+    this.setHorseCollider(facing);
+    this.resetHorseControls();
+  }
+
   getFacingDirection(horizontal, vertical) {
     return getHorseFacingDirection(horizontal, vertical);
   }
@@ -1669,28 +1691,11 @@ class MeadowScene extends ProgressScene {
       facility.id,
     );
     this.horse.body.reset(returnPosition.x, returnPosition.y);
-    this.horse.setVelocity(0, 0);
-    setHorseSpriteTexture(
-      this.horse,
-      this.progress.selectedHorseSkinId,
-      "s",
-    );
-    this.horse.setDisplayOrigin(64, 64);
-    this.horse.setScale(1);
-    this.horse.clearTint();
-    this.currentFacing = "s";
-    this.currentGait = "idle";
-    this.gallopCharge = 0;
-    this.movementFrame = 0;
-    this.animationAccumulator = 0;
-    this.dustTimer = 0;
+    this.resetHorseMotionState("s");
     this.knockbackUntil = 0;
-    resetHorseJump(this);
     this.isTransitioning = false;
     this.nearbyFacility = null;
     this.entrancePrompt.setVisible(false);
-    this.setHorseCollider("s");
-    this.resetHorseControls();
     this.horseShadow.setPosition(
       returnPosition.x,
       returnPosition.y + 31,
@@ -1833,25 +1838,10 @@ class MeadowScene extends ProgressScene {
       resetPosition.x,
       resetPosition.y,
     );
-    this.gallopCharge = 0;
-    this.currentGait = "idle";
-    this.currentFacing = "n";
-    this.movementFrame = 0;
-    this.animationAccumulator = 0;
     this.knockbackUntil = 0;
-    resetHorseJump(this, this.time.now + 500);
     this.hitCooldownUntil = this.time.now + 1200;
     this.horse.body.reset(resetPosition.x, resetPosition.y);
-    setHorseSpriteTexture(
-      this.horse,
-      this.progress.selectedHorseSkinId,
-      "n",
-    );
-    this.horse.setDisplayOrigin(64, 64);
-    this.horse.setScale(1);
-    this.horse.setAngle(0);
-    this.horse.clearTint();
-    this.setHorseCollider("n");
+    this.resetHorseMotionState("n", this.time.now + 500);
     this.horseShadow.setPosition(
       resetPosition.x,
       resetPosition.y + 31,
@@ -2344,25 +2334,9 @@ class BaseInteriorScene extends ProgressScene {
       "front-door",
     );
     this.horse.body.reset(spawn.x, spawn.y);
-    this.horse.setVelocity(0, 0);
-    setHorseSpriteTexture(
-      this.horse,
-      this.progress.selectedHorseSkinId,
-      "n",
-    );
-    this.horse.setDisplayOrigin(64, 64);
-    this.horse.setScale(1);
-    this.currentFacing = "n";
-    this.currentGait = "idle";
-    this.gallopCharge = 0;
-    this.movementFrame = 0;
-    this.animationAccumulator = 0;
-    this.dustTimer = 0;
-    resetHorseJump(this);
-    this.setHorseCollider("n");
+    this.resetHorseMotionState("n");
     this.horseShadow.setPosition(spawn.x, spawn.y + 31);
     this.exitPrompt.setVisible(false);
-    this.resetHorseControls();
     this.isTransitioning = false;
     const entryProgressSaved = this.onFacilityEntered() === true;
     this.updateHorseHud();
@@ -2501,7 +2475,7 @@ class BaseInteriorScene extends ProgressScene {
     );
   }
 
-  canCollideWithInteriorWall(horse, wall) {
+  canCollideWithInteriorWall(_horse, wall) {
     return !this.isJumping || wall.blocksJump;
   }
 
@@ -3260,7 +3234,7 @@ class TrackInteriorScene extends BaseInteriorScene {
     }
   }
 
-  collectTrackCoin(horse, coin) {
+  collectTrackCoin(_horse, coin) {
     if (
       !coin.active ||
       this.time.now < (coin.getData("retryAfter") ?? 0)
@@ -3439,7 +3413,7 @@ class TrackInteriorScene extends BaseInteriorScene {
     this.horseShadow.setPosition(constrainedX, constrainedY + 31);
   }
 
-  updateFacility(time, delta) {
+  updateFacility(time) {
     this.constrainHorseToCourse();
     this.updateLapTimer(time);
     const checkpoint = this.checkpoints[this.nextCheckpoint];
