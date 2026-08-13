@@ -70,12 +70,12 @@ $sourcePalette = @(
 $skinPalettes = [ordered]@{
   chestnut = $sourcePalette
   palomino = @(
-    [System.Drawing.Color]::FromArgb(255, 42, 30, 19),
-    [System.Drawing.Color]::FromArgb(255, 95, 62, 28),
-    [System.Drawing.Color]::FromArgb(255, 166, 111, 42),
-    [System.Drawing.Color]::FromArgb(255, 222, 166, 70),
-    [System.Drawing.Color]::FromArgb(255, 241, 193, 108),
-    [System.Drawing.Color]::FromArgb(255, 70, 55, 43),
+    [System.Drawing.Color]::FromArgb(255, 48, 29, 18),
+    [System.Drawing.Color]::FromArgb(255, 104, 61, 22),
+    [System.Drawing.Color]::FromArgb(255, 176, 105, 30),
+    [System.Drawing.Color]::FromArgb(255, 224, 156, 54),
+    [System.Drawing.Color]::FromArgb(255, 246, 197, 101),
+    [System.Drawing.Color]::FromArgb(255, 75, 48, 31),
     [System.Drawing.Color]::FromArgb(255, 24, 16, 10)
   )
   midnight = @(
