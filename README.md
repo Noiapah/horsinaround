@@ -101,10 +101,10 @@ remain solid.
 
 ### Stable horse selection
 
-The Meadow Stable displays three selectable horse skins: **Chestnut**,
-**Palomino**, and **Midnight**. Stand before a displayed horse and press **E**
-to select it. The selected skin is applied in every area and remains selected
-after leaving the stable or reloading the game.
+The Meadow Stable displays three horse skins. **Chestnut** is owned from the
+start, **Palomino** costs 10 coins, and **Midnight** costs 20 coins. Stand before
+a displayed horse and press **E** to buy or ride it. Purchased horses and the
+selected skin remain available after leaving the stable or reloading the game.
 
 ### Circus Maximus laps
 
@@ -139,6 +139,7 @@ model containing:
 - Validated horse position.
 - Coin-account balance.
 - Selected horse skin.
+- Purchased horse skins.
 - Save revision and timestamp.
 - Racetrack records.
 

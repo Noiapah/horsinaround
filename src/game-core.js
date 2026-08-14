@@ -1,4 +1,21 @@
 export const GALLOP_CHARGE_MS = 4500;
+export const HORSE_SKIN_COSTS = Object.freeze({
+  chestnut: 0,
+  palomino: 10,
+  midnight: 20,
+});
+
+export function resolveHorseAcquisition({
+  isOwned,
+  isSelected,
+  balance,
+  cost,
+}) {
+  if (isSelected) return "unchanged";
+  if (isOwned) return "selected";
+  if (!Number.isSafeInteger(cost) || cost < 0) return "invalid";
+  return balance >= cost ? "purchased" : "insufficient";
+}
 
 export function resolveGaitState({
   isMoving,
@@ -71,6 +88,12 @@ export function mergeProgressRecords(localRecords = {}, storedRecords = {}) {
 }
 
 export function reconcileStoredProgress(progress, storedProgress) {
+  progress.ownedHorseSkinIds = [
+    ...new Set([
+      ...(progress.ownedHorseSkinIds ?? []),
+      ...(storedProgress.ownedHorseSkinIds ?? []),
+    ]),
+  ];
   const storedIsNewer = storedProgress.revision > progress.revision;
   if (storedIsNewer) {
     // Durable account state belongs to the newest lease owner. In particular,

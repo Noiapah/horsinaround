@@ -1,8 +1,10 @@
 import {
   GALLOP_CHARGE_MS,
+  HORSE_SKIN_COSTS,
   getHorseColliderGeometry,
   getHorseFacingDirection,
   reconcileStoredProgress,
+  resolveHorseAcquisition,
   resolveGaitState,
 } from "./game-core.js";
 
@@ -12,7 +14,7 @@ const START_X = WORLD_WIDTH / 2;
 const START_Y = WORLD_HEIGHT / 2;
 const MAX_LIVES = 3;
 const WORLD_VERSION = 2;
-const PROGRESS_SCHEMA_VERSION = 4;
+const PROGRESS_SCHEMA_VERSION = 5;
 const PROGRESS_STORAGE_KEY = "horsin-around-progress";
 const PROGRESS_LEASE_KEY = `${PROGRESS_STORAGE_KEY}:lease`;
 const PROGRESS_LEASE_MS = 12000;
@@ -33,18 +35,21 @@ const HORSE_SKINS = [
     name: "CHESTNUT",
     textureKey: "horse-skin-chestnut",
     assetPath: "./public/assets/horse/animation/horse-chestnut-sheet.png",
+    cost: HORSE_SKIN_COSTS.chestnut,
   },
   {
     id: "palomino",
     name: "PALOMINO",
     textureKey: "horse-skin-palomino",
     assetPath: "./public/assets/horse/animation/horse-palomino-sheet.png",
+    cost: HORSE_SKIN_COSTS.palomino,
   },
   {
     id: "midnight",
     name: "MIDNIGHT",
     textureKey: "horse-skin-midnight",
     assetPath: "./public/assets/horse/animation/horse-midnight-sheet.png",
+    cost: HORSE_SKIN_COSTS.midnight,
   },
 ];
 const HORSE_SKIN_BY_ID = new Map(
@@ -107,6 +112,17 @@ function normalizeHorseSkinId(value) {
   return typeof value === "string" && HORSE_SKIN_BY_ID.has(value)
     ? value
     : DEFAULT_HORSE_SKIN_ID;
+}
+
+function normalizeOwnedHorseSkinIds(value, selectedHorseSkinId) {
+  const candidates = Array.isArray(value) ? value : [];
+  return [
+    ...new Set([
+      DEFAULT_HORSE_SKIN_ID,
+      selectedHorseSkinId,
+      ...candidates.filter((skinId) => HORSE_SKIN_BY_ID.has(skinId)),
+    ]),
+  ];
 }
 
 function getHorseFrameIndex(direction, movementFrame = null) {
@@ -396,6 +412,7 @@ class HorseProgress {
     lives = MAX_LIVES,
     coins = 0,
     selectedHorseSkinId = DEFAULT_HORSE_SKIN_ID,
+    ownedHorseSkinIds = [DEFAULT_HORSE_SKIN_ID],
     location = {
       type: "world",
       id: "meadow",
@@ -411,6 +428,10 @@ class HorseProgress {
     this.lives = lives;
     this.coins = normalizeCoinBalance(coins);
     this.selectedHorseSkinId = normalizeHorseSkinId(selectedHorseSkinId);
+    this.ownedHorseSkinIds = normalizeOwnedHorseSkinIds(
+      ownedHorseSkinIds,
+      this.selectedHorseSkinId,
+    );
     this.location = {
       type: location.type,
       id: location.id,
@@ -468,6 +489,10 @@ class HorseProgress {
           : MAX_LIVES,
       coins: normalizeCoinBalance(value.coins),
       selectedHorseSkinId: normalizeHorseSkinId(value.selectedHorseSkinId),
+      // Saves from before ownership was introduced keep their selected horse.
+      ownedHorseSkinIds: Array.isArray(value.ownedHorseSkinIds)
+        ? value.ownedHorseSkinIds
+        : [DEFAULT_HORSE_SKIN_ID, value.selectedHorseSkinId],
       location: {
         type: locationType,
         id: locationType === "interior" ? sourceLocation.id : "meadow",
@@ -512,8 +537,20 @@ class HorseProgress {
   }
 
   selectHorseSkin(skinId) {
-    if (!HORSE_SKIN_BY_ID.has(skinId)) return false;
+    if (!this.ownsHorseSkin(skinId)) return false;
     this.selectedHorseSkinId = skinId;
+    return true;
+  }
+
+  ownsHorseSkin(skinId) {
+    return this.ownedHorseSkinIds.includes(skinId);
+  }
+
+  unlockHorseSkin(skinId) {
+    if (!HORSE_SKIN_BY_ID.has(skinId)) return false;
+    if (!this.ownsHorseSkin(skinId)) {
+      this.ownedHorseSkinIds.push(skinId);
+    }
     return true;
   }
 
@@ -542,6 +579,7 @@ class HorseProgress {
       lives: this.lives,
       coins: this.coins,
       selectedHorseSkinId: this.selectedHorseSkinId,
+      ownedHorseSkinIds: [...this.ownedHorseSkinIds],
       location: {
         ...this.location,
         position: { ...this.location.position },
@@ -707,16 +745,31 @@ class LocalProgressStore {
     });
   }
 
-  commitHorseSelection(progress, skinId) {
-    if (!HORSE_SKIN_BY_ID.has(skinId)) {
+  commitHorseAcquisition(progress, skinId) {
+    const skin = HORSE_SKIN_BY_ID.get(skinId);
+    if (!skin) {
       return { status: "invalid", balance: progress.coins };
     }
     return this.commitProgressMutation(progress, () => {
-      if (progress.selectedHorseSkinId === skinId) {
-        return { status: "unchanged", changed: false };
+      const status = resolveHorseAcquisition({
+        isOwned: progress.ownsHorseSkin(skinId),
+        isSelected: progress.selectedHorseSkinId === skinId,
+        balance: progress.coins,
+        cost: skin.cost,
+      });
+      if (
+        status === "unchanged" ||
+        status === "insufficient" ||
+        status === "invalid"
+      ) {
+        return { status, changed: false };
+      }
+      if (status === "purchased") {
+        progress.spendCoins(skin.cost);
+        progress.unlockHorseSkin(skinId);
       }
       progress.selectHorseSkin(skinId);
-      return { status: "selected", changed: true };
+      return { status, changed: true };
     });
   }
 
@@ -2601,6 +2654,7 @@ class StableInteriorScene extends BaseInteriorScene {
     this.selectionStatus = null;
     this.selectionStatusUntil = 0;
     this.renderedHorseSkinId = null;
+    this.renderedOwnershipKey = null;
   }
 
   buildInterior() {
@@ -2653,8 +2707,8 @@ class StableInteriorScene extends BaseInteriorScene {
         })
         .setOrigin(0.5)
         .setDepth(9);
-      const activeMarker = this.add
-        .text(x, 326, "RIDING", {
+      const statusMarker = this.add
+        .text(x, 326, "", {
           fontFamily: '"Courier New", monospace',
           fontSize: "10px",
           fontStyle: "bold",
@@ -2664,15 +2718,14 @@ class StableInteriorScene extends BaseInteriorScene {
           resolution: 2,
         })
         .setOrigin(0.5)
-        .setDepth(9)
-        .setVisible(false);
+        .setDepth(9);
 
       this.stallChoices.push({
         skin,
         x,
         interactionPoint: { x, y: 400 },
         nameLabel,
-        activeMarker,
+        statusMarker,
       });
     }
 
@@ -2727,10 +2780,27 @@ class StableInteriorScene extends BaseInteriorScene {
   refreshStableSelection() {
     for (const choice of this.stallChoices) {
       const isActive = choice.skin.id === this.progress.selectedHorseSkinId;
+      const isOwned = this.progress.ownsHorseSkin(choice.skin.id);
       choice.nameLabel.setColor(isActive ? "#fff4bd" : "#e8c978");
-      choice.activeMarker.setVisible(isActive);
+      if (isActive) {
+        choice.statusMarker
+          .setText("RIDING")
+          .setColor("#fff4bd")
+          .setBackgroundColor("#365d33");
+      } else if (isOwned) {
+        choice.statusMarker
+          .setText("OWNED")
+          .setColor("#d9efb0")
+          .setBackgroundColor("#4c5130");
+      } else {
+        choice.statusMarker
+          .setText(`${choice.skin.cost} COINS`)
+          .setColor("#fff0a8")
+          .setBackgroundColor("#713b34");
+      }
     }
     this.renderedHorseSkinId = this.progress.selectedHorseSkinId;
+    this.renderedOwnershipKey = this.progress.ownedHorseSkinIds.join("|");
   }
 
   getNearbyStallChoice() {
@@ -2752,7 +2822,10 @@ class StableInteriorScene extends BaseInteriorScene {
   }
 
   updateFacility(time) {
-    if (this.renderedHorseSkinId !== this.progress.selectedHorseSkinId) {
+    if (
+      this.renderedHorseSkinId !== this.progress.selectedHorseSkinId ||
+      this.renderedOwnershipKey !== this.progress.ownedHorseSkinIds.join("|")
+    ) {
       this.refreshStableSelection();
     }
     if (this.selectionStatus?.visible && time >= this.selectionStatusUntil) {
@@ -2766,22 +2839,29 @@ class StableInteriorScene extends BaseInteriorScene {
     }
 
     const isActive = choice.skin.id === this.progress.selectedHorseSkinId;
+    const isOwned = this.progress.ownsHorseSkin(choice.skin.id);
     this.selectionPrompt
       .setText(
         isActive
           ? `CURRENT HORSE: ${choice.skin.name}`
-          : `E  RIDE ${choice.skin.name}`,
+          : isOwned
+            ? `E  RIDE ${choice.skin.name}`
+            : `E  BUY ${choice.skin.name} - ${choice.skin.cost} COINS`,
       )
       .setPosition(choice.x, 390)
       .setVisible(true);
 
     if (!Phaser.Input.Keyboard.JustDown(this.keys.interact)) return;
 
-    const result = this.progressStore.commitHorseSelection(
+    const result = this.progressStore.commitHorseAcquisition(
       this.progress,
       choice.skin.id,
     );
-    if (result.status === "selected" || result.status === "unchanged") {
+    if (
+      result.status === "purchased" ||
+      result.status === "selected" ||
+      result.status === "unchanged"
+    ) {
       setHorseSpriteTexture(
         this.horse,
         this.progress.selectedHorseSkinId,
@@ -2789,14 +2869,28 @@ class StableInteriorScene extends BaseInteriorScene {
         this.currentGait === "idle" ? null : this.movementFrame,
       );
       this.refreshStableSelection();
+      this.updateHorseHud();
       this.selectionPrompt.setText(
         `CURRENT HORSE: ${choice.skin.name}`,
       );
       this.showSelectionStatus(
-        result.status === "selected"
-          ? `NOW RIDING: ${choice.skin.name}`
-          : `ALREADY RIDING: ${choice.skin.name}`,
+        result.status === "purchased"
+          ? `PURCHASED ${choice.skin.name}! -${choice.skin.cost} COINS`
+          : result.status === "selected"
+            ? `NOW RIDING: ${choice.skin.name}`
+            : `ALREADY RIDING: ${choice.skin.name}`,
         "#bde59f",
+        time,
+      );
+      return;
+    }
+
+    if (result.status === "insufficient") {
+      const shortfall = choice.skin.cost - result.balance;
+      this.updateHorseHud();
+      this.showSelectionStatus(
+        `NEED ${shortfall} MORE COIN${shortfall === 1 ? "" : "S"}`,
+        "#fff0a8",
         time,
       );
       return;

@@ -1,9 +1,11 @@
 import {
   GALLOP_CHARGE_MS,
+  HORSE_SKIN_COSTS,
   getHorseColliderGeometry,
   getHorseFacingDirection,
   mergeProgressRecords,
   reconcileStoredProgress,
+  resolveHorseAcquisition,
   resolveGaitState,
 } from "../src/game-core.js";
 
@@ -95,6 +97,40 @@ export function runGameCoreTests() {
     "Front-facing horses use the vertical collider.",
   );
 
+  equal(HORSE_SKIN_COSTS.chestnut, 0, "Chestnut starts unlocked.");
+  equal(HORSE_SKIN_COSTS.palomino, 10, "Palomino costs 10 coins.");
+  equal(HORSE_SKIN_COSTS.midnight, 20, "Midnight costs 20 coins.");
+  equal(
+    resolveHorseAcquisition({
+      isOwned: false,
+      isSelected: false,
+      balance: 10,
+      cost: 10,
+    }),
+    "purchased",
+    "An exact balance can purchase a horse.",
+  );
+  equal(
+    resolveHorseAcquisition({
+      isOwned: false,
+      isSelected: false,
+      balance: 9,
+      cost: 10,
+    }),
+    "insufficient",
+    "A locked horse cannot be selected without enough coins.",
+  );
+  equal(
+    resolveHorseAcquisition({
+      isOwned: true,
+      isSelected: false,
+      balance: 0,
+      cost: 20,
+    }),
+    "selected",
+    "Owned horses can be selected for free.",
+  );
+
   equal(
     mergeProgressRecords(
       { circusTrackBestMs: 4200, localOnly: true },
@@ -113,6 +149,7 @@ export function runGameCoreTests() {
     lives: 3,
     coins: 4,
     selectedHorseSkinId: "chestnut",
+    ownedHorseSkinIds: ["chestnut", "palomino"],
     records: { circusTrackBestMs: 4500 },
   };
   reconcileStoredProgress(local, {
@@ -120,6 +157,7 @@ export function runGameCoreTests() {
     lives: 1,
     coins: 9,
     selectedHorseSkinId: "midnight",
+    ownedHorseSkinIds: ["chestnut", "midnight"],
     records: { circusTrackBestMs: 4100 },
   });
   equal(local.lives, 1, "A newer tab's heart state is preserved.");
@@ -130,6 +168,11 @@ export function runGameCoreTests() {
     "A newer tab's horse selection is preserved.",
   );
   equal(local.revision, 3, "The newest save revision is retained.");
+  equal(
+    local.ownedHorseSkinIds,
+    ["chestnut", "palomino", "midnight"],
+    "Purchased horses survive save reconciliation.",
+  );
   equal(
     local.records.circusTrackBestMs,
     4100,
