@@ -1,8 +1,10 @@
 import {
   GALLOP_CHARGE_MS,
   HORSE_SKIN_COSTS,
+  TRACK_OBSTACLES,
   getHorseColliderGeometry,
   getHorseFacingDirection,
+  isWithinTrackCourse,
   reconcileStoredProgress,
   resolveHorseAcquisition,
   resolveGaitState,
@@ -3305,6 +3307,7 @@ class TrackInteriorScene extends BaseInteriorScene {
       y: worldY(checkpoint.y),
     }));
     this.createTrackCoins(logicalCheckpoints);
+    this.createTrackObstacles();
 
     // Match collision to the visible spina and turning posts. A previous
     // oversized rectangle extended into the lower racing lane at its corners.
@@ -3408,6 +3411,54 @@ class TrackInteriorScene extends BaseInteriorScene {
       yoyo: true,
       repeat: -1,
     });
+  }
+
+  createTrackObstacles() {
+    const obstacleGraphics = this.add
+      .graphics()
+      .setScale(TRACK_SCALE_X, TRACK_SCALE_Y)
+      .setDepth(18);
+
+    for (const obstacle of TRACK_OBSTACLES) {
+      const isHorizontal = obstacle.orientation === "horizontal";
+      const width = isHorizontal ? 96 : 18;
+      const height = isHorizontal ? 18 : 96;
+      const left = obstacle.x - width / 2;
+      const top = obstacle.y - height / 2;
+
+      // The dark outer frame is the exact collision footprint, so every
+      // blocking pixel is visible. These walls remain jumpable by default.
+      obstacleGraphics.fillStyle(0x3b2418, 0.45);
+      obstacleGraphics.fillRect(left + 4, top + 5, width, height);
+      obstacleGraphics.fillStyle(0x4c2b1d);
+      obstacleGraphics.fillRect(left, top, width, height);
+      obstacleGraphics.fillStyle(0xd6a04d);
+      obstacleGraphics.fillRect(
+        left + (isHorizontal ? 4 : 5),
+        top + (isHorizontal ? 5 : 4),
+        width - (isHorizontal ? 8 : 10),
+        height - (isHorizontal ? 10 : 8),
+      );
+
+      // Crimson bindings keep the hurdles readable against the sandy track.
+      obstacleGraphics.fillStyle(0x923a2f);
+      if (isHorizontal) {
+        for (const offsetX of [20, width - 28]) {
+          obstacleGraphics.fillRect(left + offsetX, top + 3, 8, height - 6);
+        }
+      } else {
+        for (const offsetY of [20, height - 28]) {
+          obstacleGraphics.fillRect(left + 3, top + offsetY, width - 6, 8);
+        }
+      }
+
+      this.addCollisionRect(
+        obstacle.x * TRACK_SCALE_X,
+        obstacle.y * TRACK_SCALE_Y,
+        width * TRACK_SCALE_X,
+        height * TRACK_SCALE_Y,
+      );
+    }
   }
 
   resetTrackCoins() {
@@ -3548,16 +3599,15 @@ class TrackInteriorScene extends BaseInteriorScene {
   isWithinCourseOrGate(x, y) {
     const centerX = this.interiorWidth / 2;
     const centerY = 520 * TRACK_SCALE_Y;
-    const radiusX = 1240 * TRACK_SCALE_X;
-    const radiusY = 430 * TRACK_SCALE_Y;
     const inExitGate =
       Math.abs(x - centerX) <= 120 * TRACK_SCALE_X &&
       y >= centerY + 330 * TRACK_SCALE_Y;
     if (inExitGate) return true;
 
-    const normalizedX = (x - centerX) / radiusX;
-    const normalizedY = (y - centerY) / radiusY;
-    return normalizedX ** 2 + normalizedY ** 2 <= 1;
+    return isWithinTrackCourse(
+      x / TRACK_SCALE_X,
+      y / TRACK_SCALE_Y,
+    );
   }
 
   isInteriorPositionSafe(x, y) {

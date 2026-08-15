@@ -1,8 +1,10 @@
 import {
   GALLOP_CHARGE_MS,
   HORSE_SKIN_COSTS,
+  TRACK_OBSTACLES,
   getHorseColliderGeometry,
   getHorseFacingDirection,
+  isWithinTrackCourse,
   mergeProgressRecords,
   reconcileStoredProgress,
   resolveHorseAcquisition,
@@ -129,6 +131,23 @@ export function runGameCoreTests() {
     }),
     "selected",
     "Owned horses can be selected for free.",
+  );
+  equal(TRACK_OBSTACLES.length, 6, "The racetrack contains six hurdles.");
+  equal(
+    TRACK_OBSTACLES.every(({ x, y, orientation }) => {
+      const halfWidth = orientation === "horizontal" ? 48 : 9;
+      const halfHeight = orientation === "horizontal" ? 9 : 48;
+      return [
+        [x - halfWidth, y - halfHeight],
+        [x + halfWidth, y - halfHeight],
+        [x - halfWidth, y + halfHeight],
+        [x + halfWidth, y + halfHeight],
+      ].every(([cornerX, cornerY]) =>
+        isWithinTrackCourse(cornerX, cornerY),
+      );
+    }),
+    true,
+    "Every hurdle footprint is inside the enforced racetrack boundary.",
   );
 
   equal(

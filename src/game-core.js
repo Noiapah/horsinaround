@@ -4,6 +4,20 @@ export const HORSE_SKIN_COSTS = Object.freeze({
   palomino: 10,
   midnight: 20,
 });
+export const TRACK_OBSTACLES = Object.freeze([
+  { x: 850, y: 835, orientation: "vertical" },
+  { x: 1850, y: 865, orientation: "vertical" },
+  { x: 2320, y: 700, orientation: "horizontal" },
+  { x: 1900, y: 190, orientation: "vertical" },
+  { x: 1250, y: 170, orientation: "vertical" },
+  { x: 470, y: 320, orientation: "horizontal" },
+]);
+
+export function isWithinTrackCourse(x, y) {
+  const normalizedX = (x - 1400) / 1240;
+  const normalizedY = (y - 520) / 430;
+  return normalizedX ** 2 + normalizedY ** 2 <= 1;
+}
 
 export function resolveHorseAcquisition({
   isOwned,

@@ -121,6 +121,10 @@ adds one coin to the persistent account and disappears when collected. The set
 respawns after a valid completed lap and whenever the arena is entered again.
 Coins can be spent on a full heal at the Horse Hospital.
 
+Six low wooden hurdles are positioned between the checkpoint and coin lines.
+They block a grounded horse but can be cleared with **Space**, like ordinary
+interior obstacles.
+
 The arena exit is marked by a bright ground arrow and animated **EXIT** sign.
 Move near it and press **E** to return to the meadow.
 
